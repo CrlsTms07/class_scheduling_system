@@ -220,14 +220,6 @@ export function dayTotals({ patterns, entries }) {
 }
 
 /**
- * Which periods a class of this subject may go to (UI requirement 6): periods that are free for
- * the section, the teacher and the room, and not longer than the subject's minutes still to place.
- * When a class is being changed, its own minutes count as not placed, and its own place is free.
- *
- * @param {{ patterns: DayPattern[], loading: Loading, free: FreePeriod[], editing?: { slotId: number, days: number[], sameSubject: boolean } }} input
- * @returns {{ slot: TimeSlot, pattern: DayPattern, freeDays: number[], busy: { day: number, reason: string }[] }[]}
- */
-/**
  * The minutes a class takes in a period: all of it, except Homeroom Guidance in a longer period,
  * which takes only its limit (40 Junior High, 60 Senior High) from the start, like the school's
  * class program (HGP in the 6:00 – 8:00 block counts 60 minutes). The bell schedule does not change.
@@ -251,6 +243,14 @@ export function classEnd(loading, slot) {
   return `${String(Math.floor(start / 60)).padStart(2, "0")}:${String(start % 60).padStart(2, "0")}`;
 }
 
+/**
+ * Which periods a class of this subject may go to (UI requirement 6): periods that are free for
+ * the section, the teacher and the room, and not longer than the subject's minutes still to place.
+ * When a class is being changed, its own minutes count as not placed, and its own place is free.
+ *
+ * @param {{ patterns: DayPattern[], loading: Loading, free: FreePeriod[], editing?: { slotId: number, days: number[], sameSubject: boolean } }} input
+ * @returns {{ slot: TimeSlot, pattern: DayPattern, freeDays: number[], busy: { day: number, reason: string }[] }[]}
+ */
 export function fittingPeriods({ patterns, loading, free, editing }) {
   const ownMinutes = editing?.sameSubject ? (patterns.flatMap(({ slots }) => slots).find(({ id }) => id === editing.slotId)?.minutes ?? 0) : 0;
   const left = minutesLeft(loading) + ownMinutes;

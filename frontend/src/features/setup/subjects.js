@@ -159,12 +159,12 @@ export async function render(container) {
       h("p", { class: "text-sm text-muted-foreground", "aria-live": "polite" }, `${subjects.length} ${subjects.length === 1 ? "subject" : "subjects"} in SY ${year.name}`),
       h(
         "ul",
-        { class: "grid gap-3 sm:grid-cols-2 xl:grid-cols-3" },
+        { class: "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" },
         subjects.map((subject) => {
           const chip = (/** @type {string} */ text, /** @type {string} */ tone = "bg-surface-muted text-muted-foreground") => h("span", { class: `badge ${tone}` }, text);
           return h(
             "li",
-            { class: `card group flex items-start gap-3 p-4 transition-colors hover:border-brand/40 ${subject.is_active ? "" : "opacity-70"}` },
+            { class: `card group flex min-w-0 items-start gap-3 p-4 transition-colors hover:border-brand/40 ${subject.is_active ? "" : "opacity-70"}` },
             h("span", { class: "flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-base font-bold text-brand", "aria-hidden": "true" }, subject.name.trim().charAt(0).toUpperCase()),
             h(
               "div",

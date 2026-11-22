@@ -25,34 +25,232 @@ import { session } from "@/state/session.js";
 
 /** @type {Route[]} */
 export const ROUTES = [
-  { path: "/", layout: "public", title: "Home", page: () => import("@/features/guest/pages.js").then((module) => ({ render: module.renderHome })) },
-  { path: "/guest", layout: "public", title: "Find your class schedule", page: () => import("@/features/guest/pages.js").then((module) => ({ render: module.renderGuestIndex })) },
-  { path: "/guest/sections/:sectionId", layout: "public", title: "Class schedule", page: () => import("@/features/guest/pages.js").then((module) => ({ render: module.renderGuestSection })) },
-  { path: "/login", layout: "auth", title: "Sign in", page: () => import("@/features/auth/login-page.js") },
-  { path: "/signup", layout: "auth", title: "Sign up", page: () => import("@/features/auth/account-pages.js").then((module) => ({ render: module.renderSignUp })) },
-  { path: "/forgot-password", layout: "auth", title: "Forgot your password", page: () => import("@/features/auth/account-pages.js").then((module) => ({ render: module.renderForgot })) },
-  { path: "/reset-password", layout: "open", title: "Choose a new password", page: () => import("@/features/auth/account-pages.js").then((module) => ({ render: module.renderReset })) },
-  { path: "/accept-terms", layout: "gate", title: "Before you continue", page: () => import("@/features/auth/account-pages.js").then((module) => ({ render: module.renderAcceptTerms })) },
-  { path: "/change-password", layout: "gate", title: "Choose your own password", page: () => import("@/features/auth/account-pages.js").then((module) => ({ render: module.renderChangePassword })) },
-  { path: "/dashboard", layout: "app", roles: ROLES.EVERYONE, title: "Dashboard", page: () => import("@/features/dashboard/page.js") },
-  { path: "/schedule", layout: "app", roles: ROLES.STAFF, title: "Schedule", page: () => import("@/features/schedule/list/page.js") },
-  { path: "/schedule/rooms/:roomId", layout: "app", roles: ROLES.STAFF, title: "Room schedule", page: () => import("@/features/schedule/places.js").then((module) => ({ render: module.renderRoom })) },
-  { path: "/schedule/buildings/:buildingId", layout: "app", roles: ROLES.STAFF, title: "Building", page: () => import("@/features/schedule/places.js").then((module) => ({ render: module.renderBuilding })) },
-  { path: "/schedule/sections/:sectionId", layout: "app", roles: ROLES.STAFF, title: "Section schedule", page: () => import("@/features/schedule/plotter/page.js") },
-  { path: "/approvals", layout: "app", roles: ROLES.ADMIN, title: "Approvals", page: () => import("@/features/approvals/page.js") },
-  { path: "/reports", layout: "app", roles: ROLES.STAFF, title: "Reports", page: () => import("@/features/reports/page.js") },
-  { path: "/buildings", layout: "app", roles: ROLES.STAFF, title: "Rooms & Buildings", page: () => import("@/features/setup/buildings.js") },
-  { path: "/time-slots", layout: "app", roles: ROLES.STAFF, title: "Class Hours", page: () => import("@/features/setup/time-slots.js") },
-  { path: "/subjects", layout: "app", roles: ROLES.STAFF, title: "Subjects", page: () => import("@/features/setup/subjects.js") },
-  { path: "/sections", layout: "app", roles: ROLES.STAFF, title: "Sections", page: () => import("@/features/setup/sections.js") },
-  { path: "/teachers/:teacherId", layout: "app", roles: ROLES.STAFF, title: "Teacher", page: () => import("@/features/setup/teachers.js").then((module) => ({ render: module.renderDetail })) },
-  { path: "/teachers", layout: "app", roles: ROLES.STAFF, title: "Teachers", page: () => import("@/features/setup/teachers.js") },
-  { path: "/teacher-loading", layout: "app", roles: ROLES.STAFF, title: "Teacher Loading", page: () => import("@/features/teacher-loading/page.js") },
-  { path: "/users", layout: "app", roles: ROLES.ADMIN, title: "Users & Roles", page: () => import("@/features/admin/users.js") },
-  { path: "/school-years", layout: "app", roles: ROLES.ADMIN, title: "School Years", page: () => import("@/features/admin/school-years.js") },
-  { path: "/report-settings", layout: "app", roles: ROLES.ADMIN, title: "Report Settings", page: () => import("@/features/admin/report-settings.js") },
-  { path: "/my-schedule", layout: "app", roles: [...ROLES.TEACHER, ...ROLES.SCHEDULERS], title: "My Schedule", page: () => import("@/features/my-records/pages.js").then((module) => ({ render: module.renderMySchedule })) },
-  { path: "/my-profile", layout: "app", roles: [...ROLES.TEACHER, ...ROLES.SCHEDULERS], title: "My Profile", page: () => import("@/features/my-records/pages.js").then((module) => ({ render: module.renderMyProfile })) },
+  {
+    path: "/",
+    layout: "public",
+    title: "Home",
+    page: () =>
+      import("@/features/guest/pages.js").then((module) => ({
+        render: module.renderHome,
+      })),
+  },
+  {
+    path: "/guest",
+    layout: "public",
+    title: "Find your class schedule",
+    page: () =>
+      import("@/features/guest/pages.js").then((module) => ({
+        render: module.renderGuestIndex,
+      })),
+  },
+  {
+    path: "/guest/sections/:sectionId",
+    layout: "public",
+    title: "Class schedule",
+    page: () =>
+      import("@/features/guest/pages.js").then((module) => ({
+        render: module.renderGuestSection,
+      })),
+  },
+  {
+    path: "/login",
+    layout: "auth",
+    title: "Sign in",
+    page: () => import("@/features/auth/login-page.js"),
+  },
+  {
+    path: "/signup",
+    layout: "auth",
+    title: "Sign up",
+    page: () =>
+      import("@/features/auth/account-pages.js").then((module) => ({
+        render: module.renderSignUp,
+      })),
+  },
+  {
+    path: "/forgot-password",
+    layout: "auth",
+    title: "Forgot your password",
+    page: () =>
+      import("@/features/auth/account-pages.js").then((module) => ({
+        render: module.renderForgot,
+      })),
+  },
+  {
+    path: "/reset-password",
+    layout: "open",
+    title: "Choose a new password",
+    page: () =>
+      import("@/features/auth/account-pages.js").then((module) => ({
+        render: module.renderReset,
+      })),
+  },
+  {
+    path: "/accept-terms",
+    layout: "gate",
+    title: "Before you continue",
+    page: () =>
+      import("@/features/auth/account-pages.js").then((module) => ({
+        render: module.renderAcceptTerms,
+      })),
+  },
+  {
+    path: "/change-password",
+    layout: "gate",
+    title: "Choose your own password",
+    page: () =>
+      import("@/features/auth/account-pages.js").then((module) => ({
+        render: module.renderChangePassword,
+      })),
+  },
+  {
+    path: "/dashboard",
+    layout: "app",
+    roles: ROLES.EVERYONE,
+    title: "Dashboard",
+    page: () => import("@/features/dashboard/page.js"),
+  },
+  {
+    path: "/schedule",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Schedule",
+    page: () => import("@/features/schedule/list/page.js"),
+  },
+  {
+    path: "/schedule/rooms/:roomId",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Room schedule",
+    page: () =>
+      import("@/features/schedule/places.js").then((module) => ({
+        render: module.renderRoom,
+      })),
+  },
+  {
+    path: "/schedule/buildings/:buildingId",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Building",
+    page: () =>
+      import("@/features/schedule/places.js").then((module) => ({
+        render: module.renderBuilding,
+      })),
+  },
+  {
+    path: "/schedule/sections/:sectionId",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Section schedule",
+    page: () => import("@/features/schedule/plotter/page.js"),
+  },
+  {
+    path: "/approvals",
+    layout: "app",
+    roles: ROLES.ADMIN,
+    title: "Approvals",
+    page: () => import("@/features/approvals/page.js"),
+  },
+  {
+    path: "/reports",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Reports",
+    page: () => import("@/features/reports/page.js"),
+  },
+  {
+    path: "/buildings",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Rooms & Buildings",
+    page: () => import("@/features/setup/buildings.js"),
+  },
+  {
+    path: "/time-slots",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Class Hours",
+    page: () => import("@/features/setup/time-slots.js"),
+  },
+  {
+    path: "/subjects",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Subjects",
+    page: () => import("@/features/setup/subjects.js"),
+  },
+  {
+    path: "/sections",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Sections",
+    page: () => import("@/features/setup/sections.js"),
+  },
+  {
+    path: "/teachers/:teacherId",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Teacher",
+    page: () =>
+      import("@/features/setup/teachers.js").then((module) => ({
+        render: module.renderDetail,
+      })),
+  },
+  {
+    path: "/teachers",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Teachers",
+    page: () => import("@/features/setup/teachers.js"),
+  },
+  {
+    path: "/teacher-loading",
+    layout: "app",
+    roles: ROLES.STAFF,
+    title: "Teacher Loading",
+    page: () => import("@/features/teacher-loading/page.js"),
+  },
+  {
+    path: "/users",
+    layout: "app",
+    roles: ROLES.ADMIN,
+    title: "Users & Roles",
+    page: () => import("@/features/admin/users.js"),
+  },
+  {
+    path: "/school-years",
+    layout: "app",
+    roles: ROLES.ADMIN,
+    title: "School Years",
+    page: () => import("@/features/admin/school-years.js"),
+  },
+  {
+    path: "/report-settings",
+    layout: "app",
+    roles: ROLES.ADMIN,
+    title: "Report Settings",
+    page: () => import("@/features/admin/report-settings.js"),
+  },
+  {
+    path: "/my-schedule",
+    layout: "app",
+    roles: [...ROLES.TEACHER, ...ROLES.SCHEDULERS],
+    title: "My Schedule",
+    page: () =>
+      import("@/features/my-records/pages.js").then((module) => ({
+        render: module.renderMySchedule,
+      })),
+  },
+  {
+    path: "/my-profile",
+    layout: "app",
+    roles: [...ROLES.TEACHER, ...ROLES.SCHEDULERS],
+    title: "My Profile",
+    page: () =>
+      import("@/features/my-records/pages.js").then((module) => ({
+        render: module.renderMyProfile,
+      })),
+  },
 ];
 
 /**
@@ -64,6 +262,7 @@ export function matchRoute(pathname) {
   const clean = pathname.replace(/\/+$/, "") || "/";
 
   for (const route of ROUTES) {
+    /** @type {string[]} */
     const names = [];
     const pattern = route.path.replace(/:([a-zA-Z]+)/g, (_, name) => {
       names.push(name);
@@ -71,7 +270,15 @@ export function matchRoute(pathname) {
     });
     const match = clean.match(new RegExp(`^${pattern}$`));
     if (match) {
-      return { route, params: Object.fromEntries(names.map((name, index) => [name, decodeURIComponent(match[index + 1])])) };
+      return {
+        route,
+        params: Object.fromEntries(
+          names.map((name, index) => [
+            name,
+            decodeURIComponent(match[index + 1]),
+          ]),
+        ),
+      };
     }
   }
   return null;
@@ -91,10 +298,17 @@ export function redirectFor(route) {
   if (route.layout === "open" || route.layout === "public") return null;
   if (!user) return "/login";
   // Steps an account owes before anything else: the Terms and Notice, then its own password.
-  const owesTerms = user.terms_accepted_at === null || user.privacy_accepted_at === null;
-  if (route.layout === "gate") return owesTerms && route.path !== "/accept-terms" ? "/accept-terms" : !owesTerms && !user.must_change_password ? "/dashboard" : null;
+  const owesTerms =
+    user.terms_accepted_at === null || user.privacy_accepted_at === null;
+  if (route.layout === "gate")
+    return owesTerms && route.path !== "/accept-terms"
+      ? "/accept-terms"
+      : !owesTerms && !user.must_change_password
+        ? "/dashboard"
+        : null;
   if (owesTerms) return "/accept-terms";
   if (user.must_change_password) return "/change-password";
-  if (route.roles && (!user?.role || !route.roles.includes(user.role))) return "/dashboard";
+  if (route.roles && (!user?.role || !route.roles.includes(user.role)))
+    return "/dashboard";
   return null;
 }
