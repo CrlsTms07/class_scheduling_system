@@ -11,7 +11,7 @@ export const SHIFT_LABELS = { WHOLE_DAY: "Whole day", AM: "Morning (AM)", PM: "A
 
 /**
  * The shifts offered to this role, as { value: label }. Part-time is left out for Junior High.
- * @param {string | undefined} role
+ * @param {string | null | undefined} role
  * @param {string | null} [level]  "JHS" or "SHS" when known
  * @returns {Record<string, string>}
  */
@@ -24,7 +24,7 @@ export function shiftChoices(role, level = null) {
 
 /**
  * The shift a new record starts with.
- * @param {string | undefined} role
+ * @param {string | null | undefined} role
  */
 export function defaultShift(role) {
   return role === "glc" ? "AM" : "WHOLE_DAY";
@@ -33,7 +33,7 @@ export function defaultShift(role) {
 /**
  * A saved shift as options for a select: the role's choices, plus the saved one if it is not among
  * them (an older record stays readable).
- * @param {string | undefined} role
+ * @param {string | null | undefined} role
  * @param {string | null | undefined} saved
  */
 export function shiftOptions(role, saved) {

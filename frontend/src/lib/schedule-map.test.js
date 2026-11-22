@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { copyScopes, copySummaryLines, mapTabs, scopeToInput, searchRooms, searchSections, sectionsByGrade } from "./schedule-map.js";
 import { shiftWarning } from "@/api/teacher-loading.js";
 
-const section = (id, grade, name, adviser = null) => ({ id, grade, name, adviser, level: /** @type {const} */ ("JHS"), status: /** @type {const} */ ("draft") });
+const section = (/** @type {number} */ id, /** @type {number} */ grade, /** @type {string} */ name, /** @type {string | null} */ adviser = null) => ({ id, grade, name, adviser, level: /** @type {const} */ ("JHS"), status: /** @type {const} */ ("draft") });
 const A = section(1, 7, "Honesty", "Ana Reyes");
 const B = section(2, 7, "Hope");
 const C = section(3, 8, "Faith", "Ben Cruz");
