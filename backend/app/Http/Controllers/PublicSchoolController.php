@@ -2,9 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\SchoolProfile;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Response;
-use Illuminate\Support\Facades\DB;
 
 /**
  * The school's details for the landing page, open to everyone. What the Admin saved in
@@ -16,7 +15,8 @@ class PublicSchoolController extends Controller
 
     public function show(): JsonResponse
     {
-        $profile = (array) (DB::table('school_profile')->first() ?? []);
+        // Name, division, address and the other fixed details always come from config/school.php.
+        $profile = (array) SchoolProfile::current();
         $defaults = config('school');
 
         $school = [];

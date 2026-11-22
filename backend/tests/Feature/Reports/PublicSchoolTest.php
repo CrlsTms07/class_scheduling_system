@@ -28,3 +28,12 @@ it('shows the phone, email and Facebook page the Admin saved', function () {
         ->assertJsonPath('data.facebook_url', 'https://www.facebook.com/ercihs')
         ->assertJsonPath('data.school_name', 'Emmanuel Resurreccion Congressional Integrated High School');
 });
+
+it('shows the full school name even when an old profile row saved a short one', function () {
+    // The live site had "ERCIHS" saved from before the name became fixed (Nov 21, 2026).
+    DB::table('school_profile')->insert(['school_name' => 'ERCIHS', 'division' => 'Old division']);
+
+    $this->getJson('/api/public/school')
+        ->assertJsonPath('data.school_name', 'Emmanuel Resurreccion Congressional Integrated High School')
+        ->assertJsonPath('data.division', config('school.division'));
+});

@@ -7,7 +7,6 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
-use Illuminate\Support\Facades\DB;
 
 /** The 6-digit sign-in code, in the school's look like the password reset email. */
 class LoginCodeMail extends Mailable

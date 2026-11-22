@@ -29,3 +29,6 @@ docs/forms/
 # Local environment files
 .env
 .neon
+
+# Personal prompts and notes: never in Git
+docs/home/

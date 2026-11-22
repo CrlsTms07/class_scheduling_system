@@ -8,7 +8,7 @@ use App\Models\SchoolTerm;
 use App\Models\Section;
 use App\Models\User;
 use App\Support\ScheduleFormat;
-use Illuminate\Support\Facades\DB;
+use App\Support\SchoolProfile;
 
 /**
  * Everything that needs checking in a term, for the grade levels of the user.
@@ -132,7 +132,7 @@ class ValidationReportService
     {
         return $this->reports->renderPdf('reports.validation', [
             ...$data,
-            'school' => DB::table('school_profile')->first(),
+            'school' => SchoolProfile::current(),
             'logos' => $this->settings->logoDataUris(),
             'title' => 'CONFLICT AND VALIDATION REPORT',
         ]);
@@ -144,7 +144,7 @@ class ValidationReportService
     public function sheet(array $data): ReportSheet
     {
         $rows = [
-            [DB::table('school_profile')->value('school_name')],
+            [SchoolProfile::current()->school_name],
             ['CONFLICT AND VALIDATION REPORT'],
             [$data['term_label']],
             [],
