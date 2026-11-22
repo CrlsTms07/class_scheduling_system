@@ -10,13 +10,29 @@ vi.mock("@/api/schedule.js", () => ({
     { slot_id: 11, minutes: 40, free_days: [5], busy: [] },
     { slot_id: 12, minutes: 40, free_days: [5], busy: [] },
   ]),
+  getPlotter: vi.fn(async () => ({ loading: [{ id: 51, subject_id: 6, teacher_id: 9, subject: "Physical Education", is_priority: true, required_minutes: 0, scheduled_minutes: 0, teacher: "Teacher Sample 2" }] })),
   getTeacherChoices: vi.fn(async () => []),
   placeActivity: vi.fn(async () => ({})),
   quickAddTeacher: vi.fn(async () => ({ id: 99, name: "New Teacher" })),
   resolvePeriod: vi.fn(async () => ({ 5: 11 })),
 }));
 
+vi.mock("@/api/teacher-loading.js", () => ({
+  getSectionLoading: vi.fn(async () => ({
+    section: { id: 2, label: "Grade 7 – Sample B" },
+    rows: [],
+    addable: [{ id: 6, name: "Physical Education", code: null }],
+    teachers: [
+      { id: 9, name: "Teacher Sample 2", shift: "WHOLE_DAY", assigned: 1, limit: 5 },
+      { id: 10, name: "Teacher Full", shift: "WHOLE_DAY", assigned: 5, limit: 5 },
+    ],
+  })),
+  assignTeacher: vi.fn(async () => ({})),
+  teacherHint: () => "",
+}));
+
 const api = await import("@/api/schedule.js");
+const loadingApi = await import("@/api/teacher-loading.js");
 const { openClassDialog } = await import("./class-dialog.js");
 
 HTMLDialogElement.prototype.showModal = function showModal() {
@@ -106,6 +122,43 @@ describe("the Add / Edit class dialog", () => {
     expect(document.querySelector("dialog")?.textContent).toContain("6:30 AM – 7:10 AM is not offered. Friday: Teacher Sample 1 is teaching Grade 7 – Sample A.");
   });
 
+  it("says where the subjects come from when the section has no teacher loading, with a link to it", async () => {
+    openClassDialog({ plotter: { ...PLOTTER, loading: [] }, termId: 1, target: { day: 1 } });
+    await flush();
+
+    const dialog = document.querySelector("dialog");
+    expect(dialog?.textContent).toContain(`No subject is ready for ${PLOTTER.section.label} yet.`);
+    const link = /** @type {HTMLAnchorElement} */ ([...(dialog?.querySelectorAll("a") ?? [])].find((item) => item.textContent?.startsWith("Open Teacher Loading")));
+    expect(link.getAttribute("href")).toBe(`/teacher-loading?section=${PLOTTER.section.id}`);
+    expect(button("Activity")).toBeDefined();
+  });
+
+  it("adds a subject with its teacher right here, saved in Teacher Loading, and chooses it", async () => {
+    openClassDialog({ plotter: { ...PLOTTER, loading: [] }, termId: 1, target: { day: 1 } });
+    await flush();
+    click(button("Add a subject here"));
+    await flush();
+
+    const form = [...document.querySelectorAll("dialog")].at(-1);
+    expect(form?.textContent).toContain("Add a subject to Grade 7 – Sample B");
+    const pick = async (label, option) => {
+      click(/** @type {HTMLElement} */ ([...(form?.querySelectorAll("button") ?? [])].find((item) => item.textContent?.startsWith(label) || item.getAttribute("aria-label")?.startsWith(label) || item.closest("div")?.querySelector("label")?.textContent?.startsWith(label) && item.getAttribute("aria-haspopup"))));
+      await flush();
+      click(/** @type {HTMLElement} */ ([...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes(option))));
+      await flush();
+    };
+    await pick("Subject", "Physical Education");
+    await pick("Teacher", "Teacher Sample 2");
+    click(/** @type {HTMLElement} */ ([...(form?.querySelectorAll("button") ?? [])].find((item) => item.textContent?.trim() === "Add subject")));
+    await flush();
+    await flush();
+
+    expect(loadingApi.assignTeacher).toHaveBeenCalledWith(1, 2, 6, 9);
+    expect(api.getPlotter).toHaveBeenCalledWith(1, 2);
+    expect(document.querySelector("dialog")?.textContent).toContain("Physical Education");
+    expect(document.querySelector("dialog")?.textContent).not.toContain("No subject is ready");
+  });
+
   it("starts by typing the time when the section has no class hours yet (no Time Slots setup first)", async () => {
     openClassDialog({ plotter: { ...PLOTTER, patterns: [] }, termId: 1, target: { day: 1, loadingId: 50 } });
     await flush();
@@ -123,7 +176,7 @@ describe("the Add / Edit class dialog", () => {
     await flush();
     await flush();
 
-    click(/** @type {HTMLElement} */ ([...document.querySelectorAll("dialog button")].find((item) => item.textContent?.includes("Type another time"))));
+    click(/** @type {HTMLElement} */ ([...document.querySelectorAll("dialog button")].find((item) => item.textContent?.includes("Other time"))));
     expect(document.querySelector("dialog")?.textContent).toContain("Start time");
 
     click(/** @type {HTMLElement} */ ([...document.querySelectorAll("dialog button")].find((item) => item.textContent?.includes("Choose a period instead"))));

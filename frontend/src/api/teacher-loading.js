@@ -111,7 +111,9 @@ export function shiftWarning(teacherShift, sectionShift) {
  * @param {boolean} [isFull]
  */
 export function teacherHint(teacher, isFull = false) {
-  const load = isFull ? `Full load (${teacher.assigned} of ${teacher.limit} subjects)` : `${teacher.assigned} of ${teacher.limit} subjects`;
+  // Loads = subjects + 1 for an advisory (team decision, Nov 22, 2026).
+  const advisory = teacher.advises ? `, incl. advisory of ${teacher.advises}` : "";
+  const load = isFull ? `Full load (${teacher.assigned} of ${teacher.limit} loads${advisory})` : `${teacher.assigned} of ${teacher.limit} loads${advisory}`;
   if (!teacher.from_level) return load;
   return [`From ${teacher.from_level === "JHS" ? "Junior High" : "Senior High"}`, teacher.department, load].filter(Boolean).join(" · ");
 }

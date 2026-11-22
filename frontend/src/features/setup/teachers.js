@@ -25,6 +25,23 @@ import { timeRange } from "@/lib/time.js";
 
 const SHIFTS = SHIFT_LABELS;
 const LEVEL_TABS = [["", "All"], ["JHS", "Junior High"], ["SHS", "Senior High"], ["none", "No classes yet"]];
+const LEVEL_NAMES = { JHS: "Junior High", SHS: "Senior High" };
+
+/**
+ * Where a teacher belongs, beside their name (team decision, Nov 22, 2026): "Junior High" or "Senior
+ * High" (their department), and "Also teaches Senior High" when they have classes in the other level.
+ * @param {any} teacher
+ */
+function levelBadges(teacher) {
+  const home = /** @type {"JHS" | "SHS" | null} */ (teacher.home_level ?? null);
+  const other = (teacher.levels ?? []).filter((/** @type {string} */ level) => level !== home);
+  return h(
+    "div",
+    { class: "flex flex-wrap gap-1" },
+    home ? h("span", { class: `badge ${home === "SHS" ? "bg-violet-100 text-violet-900 dark:bg-violet-900 dark:text-violet-100" : "bg-teal-100 text-teal-900 dark:bg-teal-900 dark:text-teal-100"}` }, LEVEL_NAMES[home]) : null,
+    home ? other.map((/** @type {"JHS" | "SHS"} */ level) => h("span", { class: "badge bg-surface-muted text-muted-foreground" }, `Also teaches ${LEVEL_NAMES[level]}`)) : null,
+  );
+}
 
 /** @type {import("@/router.js").RenderPage} */
 export async function render(container, { query }) {
@@ -144,7 +161,9 @@ export async function render(container, { query }) {
     try {
       const [teachers, loaded] = await Promise.all([getRecords(`/terms/${term.id}/teachers`), getRecords("/personnel-options")]);
       options = loaded;
-      const matchesLevel = (/** @type {any} */ teacher, /** @type {string} */ level) => level === "" || (level === "none" ? (teacher.levels ?? []).length === 0 : (teacher.levels ?? []).includes(level));
+      // Junior High / Senior High: the teacher's own level, or where they also teach (a borrowed
+      // teacher shows in both, marked). "No classes yet": no class or advisory this term.
+      const matchesLevel = (/** @type {any} */ teacher, /** @type {string} */ level) => level === "" || (level === "none" ? (teacher.levels ?? []).length === 0 : teacher.home_level === level || (teacher.levels ?? []).includes(level));
       const words = ui.search.trim().toLowerCase();
       const shown = teachers.filter((/** @type {any} */ teacher) => matchesLevel(teacher, ui.level) && (!ui.status || (ui.status === "active") === teacher.is_active) && (!words || `${teacher.first_name} ${teacher.last_name} ${teacher.printed_name} ${teacher.department ?? ""} ${teacher.designation ?? ""}`.toLowerCase().includes(words)));
       replace(
@@ -174,14 +193,14 @@ export async function render(container, { query }) {
                 label: "Teachers",
                 items: shown,
                 columns: [
-                  { label: "Name", primary: true, cell: (/** @type {any} */ teacher) => h("a", { href: `/teachers/${teacher.id}`, class: "inline-flex min-h-11 items-center text-brand underline-offset-2 hover:underline" }, teacher.printed_name) },
+                  { label: "Name", primary: true, cell: (/** @type {any} */ teacher) => h("div", { class: "space-y-1" }, h("a", { href: `/teachers/${teacher.id}`, class: "inline-flex min-h-11 items-center text-brand underline-offset-2 hover:underline" }, teacher.printed_name), levelBadges(teacher)) },
                   { label: "Department", cell: (/** @type {any} */ teacher) => teacher.department ?? h("span", { class: "badge bg-amber-100 text-amber-900 dark:bg-amber-900 dark:text-amber-100" }, "No department yet") },
                   { label: "Shift", cell: (/** @type {any} */ teacher) => SHIFTS[/** @type {keyof typeof SHIFTS} */ (teacher.shift)] },
                   { label: "Subjects", cell: (/** @type {any} */ teacher) => `${teacher.assigned} of ${teacher.max_subjects}` },
                   { label: "Advisory", cell: (/** @type {any} */ teacher) => teacher.advisory ?? "–" },
                   { label: "Account", cell: (/** @type {any} */ teacher) => teacher.account_email ?? "None" },
                 ],
-                actions: (/** @type {any} */ teacher) => [teacher.can_edit === false ? h("span", { class: "text-small text-muted-foreground" }, "Kept by the Admin") : editButton(teacher.printed_name, () => teacherForm(teacher)), h("a", { href: `/teachers/${teacher.id}`, class: "btn btn-quiet" }, "Classes")],
+                actions: (/** @type {any} */ teacher) => [teacher.can_edit === false ? h("span", { class: "inline-flex min-h-11 items-center gap-1 text-small text-muted-foreground", title: `Only the ${teacher.home_level === "SHS" ? "Senior High Master Teacher" : "Junior High Chairperson"} or the Admin can change this record.` }, icon("lock", "size-4"), "View only") : editButton(teacher.printed_name, () => teacherForm(teacher)), h("a", { href: `/teachers/${teacher.id}`, class: "btn btn-quiet" }, "Classes")],
               }),
       );
       if (query.get("edit") && !content.dataset.opened) {
@@ -219,7 +238,7 @@ export async function renderDetail(container, { params }) {
         "div",
         { class: "space-y-5 p-4 sm:p-6" },
         breadcrumbs([{ label: "Home", to: "/dashboard" }, { label: "Teachers", to: "/teachers" }, { label: teacher.printed_name }]),
-        pageHeader({ icon: "user", title: teacher.printed_name, description: [teacher.designation, teacher.department, SHIFTS[/** @type {keyof typeof SHIFTS} */ (teacher.shift)]].filter(Boolean).join(" · "), actions: teacher.can_edit === false ? null : h("a", { href: `/teachers?edit=${teacher.id}`, class: "btn btn-outline" }, icon("pencil"), "Edit") }),
+        pageHeader({ icon: "user", title: teacher.printed_name, description: [teacher.home_level ? LEVEL_NAMES[/** @type {"JHS" | "SHS"} */ (teacher.home_level)] : null, teacher.designation, teacher.department, SHIFTS[/** @type {keyof typeof SHIFTS} */ (teacher.shift)]].filter(Boolean).join(" · "), actions: teacher.can_edit === false ? null : h("a", { href: `/teachers?edit=${teacher.id}`, class: "btn btn-outline" }, icon("pencil"), "Edit") }),
         h("div", { class: "grid grid-cols-2 gap-3 lg:grid-cols-4" },
           [["Subjects", `${teacher.assigned} of ${teacher.max_subjects}`], ["Minutes a week", String(schedule.minutes_per_week)], ["Advisory", teacher.advisory ?? "None"], ["Account", teacher.account_email ? "Linked" : "None"]].map(([label, value]) => h("div", { class: "card p-4" }, h("p", { class: "text-small text-muted-foreground" }, label), h("p", { class: "text-lg font-bold text-accent" }, value))),
         ),

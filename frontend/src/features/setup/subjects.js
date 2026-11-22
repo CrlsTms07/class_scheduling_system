@@ -85,19 +85,30 @@ export async function render(container) {
         await changeRecord(subject ? `/subjects/${subject.id}` : `/school-years/${year.id}/subjects`, subject ? "PUT" : "POST", body);
         return `${body.name} was ${subject ? "saved" : "added"}.`;
       },
-      remove: subject ? { label: "Delete this subject", message: `This deletes ${subject.name} from SY ${year.name}.`, blockedReason: subject.locked_reason, run: async () => { await changeRecord(`/subjects/${subject.id}`, "DELETE"); return `${subject.name} was deleted.`; } } : undefined,
+      remove: subject ? { label: "Delete this subject", message: deleteMessage(subject), blockedReason: subject.delete_blocked_reason, run: async () => { await changeRecord(subjectDeleteUrl(subject), "DELETE"); return `${subject.name} was deleted.`; } } : undefined,
     });
   };
 
-  /** Delete straight from the list (a subject with teacher loading stays, and says why). */
+  /**
+   * What deleting says: a subject with teacher loading but no class on a schedule goes with its
+   * loading, said in the confirmation (Nov 22, 2026).
+   * @param {any} subject
+   */
+  const deleteMessage = (subject) =>
+    subject.loading_count > 0
+      ? `It is taken out of SY ${year.name}, and its teacher loading in ${subject.loading_count} ${subject.loading_count === 1 ? "section" : "sections"} is removed too. No class is on a schedule yet, so nothing else is lost.`
+      : `It is taken out of SY ${year.name}.`;
+  const subjectDeleteUrl = (/** @type {any} */ subject) => `/subjects/${subject.id}${subject.loading_count > 0 ? "?with_loading=1" : ""}`;
+
+  /** Delete straight from the list (a subject already on a schedule stays, and says why). */
   const deleteSubject = async (/** @type {any} */ subject) => {
-    if (subject.locked_reason) {
-      toast.error(`${subject.name} cannot be deleted: ${subject.locked_reason} Mark it as not offered instead.`);
+    if (subject.delete_blocked_reason) {
+      toast.error(`${subject.name} cannot be deleted: ${subject.delete_blocked_reason} Remove its classes first, or mark it as not offered.`);
       return;
     }
-    if (!(await confirmAction({ title: `Delete ${subject.name}?`, message: `It is taken out of SY ${year.name}.`, confirmLabel: "Yes, delete" }))) return;
+    if (!(await confirmAction({ title: `Delete ${subject.name}?`, message: deleteMessage(subject), confirmLabel: "Yes, delete" }))) return;
     try {
-      await changeRecord(`/subjects/${subject.id}`, "DELETE");
+      await changeRecord(subjectDeleteUrl(subject), "DELETE");
       toast.success(`${subject.name} was deleted.`);
     } catch (error) {
       toast.error(error);
@@ -176,7 +187,7 @@ export async function render(container) {
               "div",
               { class: "flex shrink-0 gap-1" },
               h("button", { type: "button", class: "btn btn-quiet size-11 p-0", "aria-label": `Edit ${subject.name}`, title: "Edit", onclick: () => subjectForm(subject) }, icon("pencil", "size-4")),
-              h("button", { type: "button", class: "btn btn-quiet size-11 p-0 text-danger", "aria-label": `Delete ${subject.name}`, title: subject.locked_reason ? "It has teacher loading, so it stays" : "Delete", onclick: () => deleteSubject(subject) }, icon("trash", "size-4")),
+              h("button", { type: "button", class: "btn btn-quiet size-11 p-0 text-danger", "aria-label": `Delete ${subject.name}`, title: subject.delete_blocked_reason ? "It is on a schedule, so it stays" : "Delete", onclick: () => deleteSubject(subject) }, icon("trash", "size-4")),
             ),
           );
         }),

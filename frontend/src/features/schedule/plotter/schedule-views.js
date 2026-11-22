@@ -68,7 +68,7 @@ function periodCell({ plotter, isColored, canEdit, fitting, onTap }, slot, day, 
       "data-drop": `${slot.id}:${day}`,
       "data-drag": isTaken && canEdit && !locked && entry?.section_subject_id ? `${entry.section_subject_id}:${slot.id}:${day}` : null,
       class: `group relative flex min-h-14 w-full flex-col items-start justify-center rounded-lg border px-3 py-2 text-left text-sm transition ${
-        isTaken ? color : isFit ? "border-2 border-dashed border-brand bg-brand-soft text-brand" : "border-dashed text-muted-foreground hover:bg-surface-muted"
+        isTaken ? color : isFit ? "border-2 border-dashed border-brand bg-brand-soft text-brand" : slot.is_async ? "border-dashed border-sky-300 bg-sky-50/60 text-muted-foreground hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40" : "border-dashed text-muted-foreground hover:bg-surface-muted"
       }`,
       onclick: () => onTap(slot, day),
     },
@@ -82,6 +82,19 @@ function periodCell({ plotter, isColored, canEdit, fitting, onTap }, slot, day, 
         ? h("span", { class: "flex items-center gap-1 font-medium" }, icon("plus"), "Open slot · Add subject")
         : h("span", { class: "flex items-center gap-1 font-medium" }, icon("plus"), isFit ? "Place here" : "Add class"),
   );
+}
+
+/**
+ * Senior High block schedule (Nov 22, 2026): an "F2F" or "Async" badge beside each period's time,
+ * so face-to-face blocks and the asynchronous session are told apart. Nothing for Junior High.
+ * @param {import("@/lib/schedule.js").TimeSlot} slot
+ * @param {ViewProps} props
+ */
+function slotBadge(slot, props) {
+  if (slot.is_break || props.plotter.section.level !== "SHS") return null;
+  return slot.is_async
+    ? h("span", { class: "badge ml-1 bg-sky-100 text-sky-900 dark:bg-sky-900 dark:text-sky-100" }, "Async")
+    : h("span", { class: "badge ml-1 bg-violet-100 text-violet-900 dark:bg-violet-900 dark:text-violet-100" }, "F2F");
 }
 
 /**
@@ -100,7 +113,7 @@ function dayPeriods(props, day) {
       h(
         "li",
         { class: "space-y-1" },
-        slot.is_break ? null : h("p", { class: "text-small text-muted-foreground" }, `${slotTimeLabel(slot)} · ${slot.minutes} mins`),
+        slot.is_break ? null : h("p", { class: "text-small text-muted-foreground" }, `${slotTimeLabel(slot)} · ${slot.minutes} mins`, slotBadge(slot, props)),
         periodCell(props, slot, day),
       ),
     ),
@@ -152,7 +165,7 @@ export function gridView(props, pattern) {
           h(
             "tr",
             { class: "border-t" },
-            h("th", { scope: "row", class: "sticky left-0 z-10 bg-surface p-2 text-left align-top font-normal" }, h("span", { class: "block font-medium" }, formatTime(slot.start_time)), h("span", { class: "block text-small text-muted-foreground" }, `to ${formatTime(slot.end_time)} · ${slot.minutes} mins`)),
+            h("th", { scope: "row", class: "sticky left-0 z-10 bg-surface p-2 text-left align-top font-normal" }, h("span", { class: "block font-medium" }, formatTime(slot.start_time)), h("span", { class: "block text-small text-muted-foreground" }, `to ${formatTime(slot.end_time)} · ${slot.minutes} mins`), slotBadge(slot, props)),
             slot.is_break
               ? h("td", { colspan: String(pattern.days.length), class: "p-1" }, periodCell(props, slot, pattern.days[0]))
               : pattern.days.map((day) => h("td", { class: "p-1 align-top" }, periodCell(props, slot, day, { compact: true }))),

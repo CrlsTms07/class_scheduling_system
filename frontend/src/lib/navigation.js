@@ -75,8 +75,8 @@ const NAVIGATION = [
     items: [
       { name: "1 · Teachers", path: "/teachers", icon: "users", roles: STAFF },
       { name: "2 · Subjects & Class Hours", path: "/subjects", icon: "book", roles: STAFF },
-      { name: "3 · Sections", path: "/sections", icon: "team", roles: STAFF },
-      { name: "4 · Rooms & Buildings", path: "/buildings", icon: "building", roles: STAFF },
+      { name: "3 · Rooms & Buildings", path: "/buildings", icon: "building", roles: STAFF },
+      { name: "4 · Sections", path: "/sections", icon: "team", roles: STAFF },
       { name: "5 · Teacher Loading", path: "/teacher-loading", icon: "clipboard", roles: STAFF },
     ],
   },

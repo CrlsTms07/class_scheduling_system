@@ -183,7 +183,7 @@ export async function quickAddTeacher(body) {
 /**
  * The conflicts and suggestions in an API error, when it is a schedule conflict.
  * @param {unknown} error
- * @returns {{ conflicts: { type: string, days: number[], message: string }[], suggestions: { rooms: { id: number, label: string }[], slots: { id: number, label: string }[], teachers: { id: number, name: string, teaches_subject: boolean, hours_per_week: number }[] } } | null}
+ * @returns {{ conflicts: { type: string, days: number[], message: string }[], suggestions: { rooms: { id: number, label: string }[], slots: { id: number, label: string }[], teachers: { id: number, name: string, teaches_subject: boolean, hours_per_week: number, over_day_limit?: boolean }[] } } | null}
  */
 export function conflictDetailsOf(error) {
   const problem = /** @type {any} */ (error);

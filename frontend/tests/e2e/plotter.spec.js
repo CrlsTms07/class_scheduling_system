@@ -37,7 +37,7 @@ test.describe.configure({ mode: "serial" });
 test("signs in and shows the term being worked on", async ({ page }) => {
   await signIn(page);
   await expect(page.getByText(/Second Term/).first()).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Main menu" }).getByRole("link", { name: "6 · Teacher Loading" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main menu" }).getByRole("link", { name: "5 · Teacher Loading" })).toBeVisible();
 });
 
 test("places a class by tapping a subject, then a lit period", async ({ page }) => {
@@ -48,12 +48,13 @@ test("places a class by tapping a subject, then a lit period", async ({ page }) 
 
   await page.getByRole("button", { name: /Homeroom Guidance/ }).first().click();
   await expect(page.getByRole("status").filter({ hasText: "Placing Homeroom Guidance" })).toBeVisible();
-  const lit = page.getByRole("button", { name: /^Add class on Monday/ }).filter({ hasText: "Place here" });
+  // Junior High Homeroom is at most 40 minutes (Nov 22, 2026): only the 40-minute Friday periods fit.
+  const lit = page.getByRole("button", { name: /^Add class on Friday/ }).filter({ hasText: "Place here" });
   await expect(lit.first()).toBeVisible();
 
   await lit.first().click();
   await expect(page.getByText(/Homeroom Guidance was placed/)).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Homeroom Guidance, Monday/ }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Homeroom Guidance, Friday/ }).first()).toBeVisible();
 });
 
 test("offers only free periods, and explains a conflict with the same teacher", async ({ page }) => {
@@ -62,20 +63,20 @@ test("offers only free periods, and explains a conflict with the same teacher", 
   await page.goto(`/schedule/sections/${SECTION_B}`);
   await expect(page.getByRole("heading", { level: 1, name: "Grade 7 – Sample B" })).toBeVisible();
 
-  // The period Sample A just took for Homeroom (same teacher) is not offered for Monday.
-  await page.getByRole("button", { name: /^Add class on Monday at 6:30 AM/ }).first().click();
+  // The period Sample A just took for Homeroom (same teacher) is not offered for Friday.
+  await page.getByRole("button", { name: /^Add class on Friday at 6:30 AM/ }).first().click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("heading", { name: /Add class · Monday/ })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: /Add class · Friday/ })).toBeVisible();
   await choose(page, "Subject", "Homeroom Guidance");
-  await expect(dialog.getByText(/Monday: .* is teaching/)).toBeVisible();
+  await expect(dialog.getByText(/Friday: .* is teaching/)).toBeVisible();
 
   // That period shows as a Full block with the reason, before anything is saved; it cannot be chosen.
-  const full = dialog.getByRole("radio", { name: /^6:30 AM – 7:15 AM/ });
+  const full = dialog.getByRole("radio", { name: /^6:30 AM – 7:10 AM/ });
   await expect(full).toHaveAttribute("aria-disabled", "true");
   await expect(full).toContainText("Full");
   // aria-disabled: Playwright will not click it unless forced, but a person can, and is told why.
   await full.click({ force: true });
-  await expect(dialog.getByText(/6:30 AM – 7:15 AM cannot be used: .* is teaching .*Sample A/)).toBeVisible();
+  await expect(dialog.getByText(/6:30 AM – 7:10 AM cannot be used: .* is teaching .*Sample A/)).toBeVisible();
 });
 
 test("submits for approval after checking each flag", async ({ page }) => {

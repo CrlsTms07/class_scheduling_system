@@ -89,8 +89,13 @@ test("adds a building with a room, a bell schedule from a preset, a subject, a s
   await page.getByRole("dialog").getByRole("button", { name: "Add bell schedule" }).click();
   await expect(page.getByText("AM Monday – Friday was added.")).toBeVisible();
   await page.getByRole("region", { name: "AM Monday – Friday" }).getByRole("button", { name: "Use a preset" }).click();
+  // The morning shift ends at 12:30 PM (Nov 22, 2026): 8 rows of 40-minute periods fit.
+  await choose(page, "Rows", "8 rows");
+  await page.getByRole("dialog").getByRole("spinbutton", { name: /^Minutes per period/ }).fill("40");
+  // The break positions are choices with the time each period ends (only possible ones are offered).
+  await choose(page, "Lunch comes", "After period 5 ");
   await page.getByRole("dialog").getByRole("button", { name: "Fill the bell schedule" }).click();
-  await expect(page.getByText("AM Monday – Friday now has 10 rows.")).toBeVisible();
+  await expect(page.getByText("AM Monday – Friday now has 8 rows.")).toBeVisible();
 
   await page.goto("/subjects");
   await page.getByRole("button", { name: "Add subject" }).first().click();
@@ -102,25 +107,39 @@ test("adds a building with a room, a bell schedule from a preset, a subject, a s
   await page.getByRole("dialog").getByRole("button", { name: "Add subject" }).click();
   await expect(page.getByText("Robotics E2E was added.")).toBeVisible();
 
-  await page.goto("/sections");
-  await page.getByRole("button", { name: "Add section" }).first().click();
-  await fill(page, "Section name", "Diligence E2E");
-  await choose(page, "Grade level", "Grade 8");
-  await page.getByRole("dialog").getByRole("button", { name: "Add section" }).click();
-  await expect(page.getByText("Diligence E2E was added.")).toBeVisible();
-
   await page.goto("/teachers");
   await page.getByRole("button", { name: "Add teacher" }).first().click();
   await fill(page, "First name", "Rosa");
   await fill(page, "Last name", "Bautista");
   await choose(page, "Department of", "Junior High");
-  await choose(page, "Department", "Mathematics");
+  await choose(page, "Department(?! of)", "Mathematics");
   await choose(page, "Designation", "Teacher I");
   await page.getByRole("dialog").getByRole("button", { name: "Add teacher" }).click();
   await expect(page.getByText("Rosa Bautista was added.")).toBeVisible();
   await page.getByRole("link", { name: /Bautista/ }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: /Bautista/ })).toBeVisible();
   await expect(page.getByText("Teacher I · Mathematics")).toBeVisible();
+
+  // The adviser and the room are required (Nov 21, 2026); a room can be added from the dropdown.
+  await page.goto("/sections");
+  await page.getByRole("button", { name: "Add section" }).first().click();
+  await fill(page, "Section name", "Diligence E2E");
+  await choose(page, "Grade level", "Grade 8");
+  await page.getByRole("dialog").getByRole("button", { name: "Add section" }).click();
+  await expect(page.getByText("Adviser is required")).toBeVisible();
+  await choose(page, "Adviser", "Bautista");
+  await page.getByRole("dialog").getByRole("button", { name: /^Home room/ }).click();
+  await page.getByRole("searchbox", { name: /^Search home room/ }).fill("302");
+  await page.getByRole("option", { name: 'Add "302"' }).click();
+  const roomDialog = page.getByRole("dialog", { name: "Add a room" });
+  await roomDialog.getByRole("button", { name: /^Building/ }).click();
+  await page.getByRole("option", { name: /Annex E2E/ }).first().click();
+  await expect(roomDialog.getByRole("textbox", { name: /^Room number/ })).toHaveValue("302");
+  await roomDialog.getByRole("button", { name: "Add room" }).click();
+  await expect(page.getByText("Room Annex E2E – 302 was added.")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Add a section" }).getByRole("button", { name: /^Home room/ })).toContainText("Annex E2E – 302");
+  await page.getByRole("dialog", { name: "Add a section" }).getByRole("button", { name: "Add section" }).click();
+  await expect(page.getByText("Diligence E2E was added.")).toBeVisible();
 });
 
 test("a new sign-up is activated by the Admin", async ({ page }) => {

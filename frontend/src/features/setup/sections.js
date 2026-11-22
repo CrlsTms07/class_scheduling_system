@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Step 3 of the setup: Sections of this school year, each with its grade, track (Senior High),
+ * Step 4 of the setup: Sections of this school year, each with its grade, track (Senior High),
  * shift, adviser (one advisory per teacher a year), co-adviser, home room and class size.
  * A Chairperson or Master Teacher encodes the sections of their own grade levels.
  */
@@ -32,6 +32,72 @@ export async function render(container, { query }) {
   /** @type {any} */
   let options = { grade_levels: [], tracks: [], teachers: [], rooms: [] };
 
+  /**
+   * "+ Add room" in the section form: rooms come in step 3, but one that was missed can still be added
+   * right here (team decision, Nov 21, 2026: the room is required). A new building can be typed too.
+   * Resolves with the new room, or null when the form is closed without saving.
+   * @param {string} typed  the room number typed in the dropdown
+   * @returns {Promise<{ value: number, label: string } | null>}
+   */
+  const addRoom = async (typed) => {
+    const isAdmin = session.user?.role === "super_admin";
+    const buildings = await getRecords("/buildings");
+    const isNew = (/** @type {any} */ value) => String(value ?? "").startsWith("new:");
+    /** @type {{ value: number, label: string } | null} */
+    let added = null;
+    /** New buildings already saved, by name: a second try (if the room fails) reuses them. */
+    /** @type {Map<string, number>} */
+    const savedBuildings = new Map();
+    return new Promise((resolve) => {
+      openFormDialog({
+        title: "Add a room",
+        description: "It is also listed on the Rooms & Buildings page.",
+        fields: [
+          {
+            name: "building",
+            label: "Building",
+            type: "select",
+            required: true,
+            options: buildings.map((/** @type {any} */ building) => ({ value: building.id, label: building.name })),
+            help: "Not listed yet? Type its name and choose Use.",
+            localCreate: true,
+            onCreate: async (name) => {
+              const trimmed = name.trim();
+              if (buildings.some((/** @type {any} */ building) => building.name.trim().toLowerCase() === trimmed.toLowerCase())) throw new Error(`${trimmed} is already in the list. Choose it instead.`);
+              return { value: `new:${trimmed}`, label: `${trimmed} (new building)` };
+            },
+          },
+          ...(isAdmin ? [{ name: "department", label: "Used by", type: /** @type {const} */ ("select"), requiredWhen: (/** @type {Record<string, any>} */ values) => isNew(values.building), options: [{ value: "JHS", label: "Junior High" }, { value: "SHS", label: "Senior High" }, { value: "BOTH", label: "Both (shared, like a gym or library)" }], help: "Only for a new building: who holds classes there.", check: (/** @type {any} */ value, /** @type {Record<string, any>} */ values) => (value && !isNew(values.building) ? "Only a new building needs this. Leave it empty." : null) }] : []),
+          {
+            name: "room_number",
+            label: "Room number",
+            required: true,
+            value: typed.trim(),
+            check: (value, values) => {
+              const building = buildings.find((/** @type {any} */ item) => String(item.id) === String(values.building));
+              return building && (building.rooms ?? []).some((/** @type {any} */ room) => String(room.room_number).trim().toLowerCase() === String(value).trim().toLowerCase()) ? `${building.name} already has room ${String(value).trim()}.` : null;
+            },
+          },
+        ],
+        submitLabel: "Add room",
+        onSubmit: async (values) => {
+          let buildingId = values.building;
+          let buildingName = buildings.find((/** @type {any} */ item) => String(item.id) === String(buildingId))?.name;
+          if (isNew(buildingId)) {
+            buildingName = String(buildingId).slice(4);
+            const body = isAdmin ? { name: buildingName, department: values.department === "BOTH" ? null : values.department } : { name: buildingName };
+            buildingId = savedBuildings.get(buildingName) ?? (await changeRecord("/buildings", "POST", body)).data.id;
+            savedBuildings.set(buildingName, Number(buildingId));
+          }
+          const room = await changeRecord(`/buildings/${buildingId}/rooms`, "POST", { room_number: values.room_number.trim(), is_active: true });
+          added = { value: room.data.id, label: `${buildingName} – ${values.room_number.trim()}` };
+          return `Room ${added.label} was added.`;
+        },
+        onClose: () => resolve(added),
+      });
+    });
+  };
+
   /** This year's sections, to say at once when a name is taken. */
   /** @type {any[]} */
   let knownSections = [];
@@ -39,7 +105,7 @@ export async function render(container, { query }) {
     // The choices are loaded first, so a quick tap never opens an empty form.
     options = await getRecords(`/school-years/${year.id}/section-options`);
     const teacherOptions = (/** @type {"adviser" | "co"} */ kind) => [
-      { value: "", label: kind === "adviser" ? "No adviser yet" : "No co-adviser" },
+      ...(kind === "co" ? [{ value: "", label: "No co-adviser" }] : []),
       ...options.teachers.map((/** @type {any} */ teacher) => ({
         value: teacher.id,
         label: teacher.name,
@@ -53,6 +119,8 @@ export async function render(container, { query }) {
     const hasJhs = levels.has("JHS");
     const levelOf = (/** @type {any} */ gradeId) => options.grade_levels.find((/** @type {any} */ grade) => String(grade.id) === String(gradeId))?.level;
     const roomLabel = hasJhs && hasShs ? "Home room (Junior High) or usual room (Senior High)" : hasShs ? "Usual room" : "Home room";
+    /** A Senior High section (or any section, for the Master Teacher, who has Senior High only). */
+    const isShs = (/** @type {Record<string, any>} */ values) => levelOf(values.grade_level_id) === "SHS" || (!hasJhs && hasShs);
     const roomHelp = hasJhs && hasShs ? "Its classes take this room unless another is chosen." : hasShs ? "Senior High classes may use other rooms; this is the one they take unless another is chosen." : "The section's fixed room: its classes are held here.";
     openFormDialog({
       title: section ? `Edit ${section.label}` : "Add a section",
@@ -61,11 +129,11 @@ export async function render(container, { query }) {
         { name: "name", label: "Section name", required: true, value: section?.name, help: "Like Honesty or STEM 11-1", check: (value, values) => (knownSections.some((/** @type {any} */ other) => other.id !== section?.id && String(other.grade_level_id) === String(values.grade_level_id) && other.name.trim().toLowerCase() === String(value).trim().toLowerCase()) ? "This grade level already has a section with this name." : null) },
         { name: "grade_level_id", label: "Grade level", type: "select", required: true, value: section?.grade_level_id ?? "", disabled: !!section?.locked_reason, options: options.grade_levels.map((/** @type {any} */ grade) => ({ value: grade.id, label: `Grade ${grade.grade}` })) },
         { name: "shift", label: "Shift", type: "select", required: true, value: section?.shift ?? defaultShift(session.user?.role), disabled: !!section?.locked_reason, options: shiftOptions(session.user?.role, section?.shift), check: (/** @type {any} */ value, /** @type {any} */ values) => (value === "PART_TIME" && levelOf(values.grade_level_id) === "JHS" ? "The part-time shift is for Senior High only." : null) },
-        ...(hasShs ? [{ name: "track_id", label: "Track", type: /** @type {const} */ ("select"), help: "For Senior High only, like Academic or TechPro.", check: (/** @type {any} */ value, /** @type {any} */ values) => (value && levelOf(values.grade_level_id) === "JHS" ? "Only Senior High sections have a track. Choose No track." : null), value: section?.track_id ?? "", options: [{ value: "", label: "No track" }, ...options.tracks.map((/** @type {any} */ track) => ({ value: track.id, label: track.name }))] }] : []),
-        ...(hasShs ? [{ name: "strand", label: "Strand", value: section?.strand ?? "", help: "For Senior High only, like Arts, Social Science and Humanities. Printed after the track.", check: (/** @type {any} */ value, /** @type {any} */ values) => (String(value ?? "").trim() && levelOf(values.grade_level_id) === "JHS" ? "Only Senior High sections have a strand. Leave it empty." : String(value ?? "").length > 120 ? "Use at most 120 characters." : null) }] : []),
-        { name: "adviser_id", label: "Adviser", type: "select", value: section?.adviser_id ?? "", options: teacherOptions("adviser"), help: "A teacher advises one section a year.", check: (value, values) => (value && value === values.co_adviser_id ? "The adviser and co-adviser must be different people." : null) },
+        ...(hasShs ? [{ name: "track_id", label: "Track", type: /** @type {const} */ ("select"), requiredWhen: isShs, help: hasJhs ? "Required for Senior High sections, like Academic or TechPro. Junior High sections have none." : "Like Academic or TechPro.", check: (/** @type {any} */ value, /** @type {any} */ values) => (value && levelOf(values.grade_level_id) === "JHS" ? "Only Senior High sections have a track. Choose No track." : null), value: section?.track_id ?? "", options: [...(hasJhs ? [{ value: "", label: "No track (Junior High)" }] : []), ...options.tracks.map((/** @type {any} */ track) => ({ value: track.id, label: track.name }))] }] : []),
+        ...(hasShs ? [{ name: "strand", label: "Strand", requiredWhen: isShs, value: section?.strand ?? "", help: hasJhs ? "Required for Senior High sections, like Arts, Social Science and Humanities. Printed after the track." : "Like Arts, Social Science and Humanities. Printed after the track.", check: (/** @type {any} */ value, /** @type {any} */ values) => (String(value ?? "").trim() && levelOf(values.grade_level_id) === "JHS" ? "Only Senior High sections have a strand. Leave it empty." : String(value ?? "").length > 120 ? "Use at most 120 characters." : null) }] : []),
+        { name: "adviser_id", label: "Adviser", type: "select", required: true, value: section?.adviser_id ?? "", options: teacherOptions("adviser"), help: "A teacher advises one section a year.", check: (value, values) => (value && value === values.co_adviser_id ? "The adviser and co-adviser must be different people." : null) },
         { name: "co_adviser_id", label: "Co-adviser", type: "select", value: section?.co_adviser_id ?? "", options: teacherOptions("co") },
-        { name: "home_room_id", label: roomLabel, type: "select", value: section?.home_room_id ?? "", options: [{ value: "", label: "No room yet" }, ...options.rooms.map((/** @type {any} */ room) => ({ value: room.id, label: room.label }))], help: roomHelp },
+        { name: "home_room_id", label: roomLabel, type: "select", required: true, value: section?.home_room_id ?? "", options: options.rooms.map((/** @type {any} */ room) => ({ value: room.id, label: room.label })), help: `${roomHelp} Not listed yet? Type its number and choose Add.`, onCreate: addRoom, createdMessage: false },
         { name: "class_size", label: "Class size", type: "number", min: 1, max: 100, value: section?.class_size },
       ],
       submitLabel: section ? "Save changes" : "Add section",
@@ -75,7 +143,15 @@ export async function render(container, { query }) {
         await changeRecord(section ? `/sections/${section.id}` : `/school-years/${year.id}/sections`, section ? "PUT" : "POST", body);
         return `${values.name} was ${section ? "saved" : "added"}.`;
       },
-      remove: section ? { label: "Delete this section", message: `This deletes ${section.label} with its teacher loading.`, blockedReason: section.locked_reason, run: async () => { await changeRecord(`/sections/${section.id}`, "DELETE"); return `${section.label} was deleted.`; } } : undefined,
+      remove: section
+        ? {
+            label: "Delete this section",
+            message: section.loading_count > 0 ? `This deletes ${section.label} with its teacher loading (${section.loading_count} ${section.loading_count === 1 ? "subject" : "subjects"}). No class is on its schedule yet, so nothing else is lost.` : `This deletes ${section.label}.`,
+            // Only a schedule keeps a section; its teacher loading goes with it (Nov 22, 2026).
+            blockedReason: section.delete_blocked_reason,
+            run: async () => { await changeRecord(`/sections/${section.id}${section.loading_count > 0 ? "?with_loading=1" : ""}`, "DELETE"); return `${section.label} was deleted.`; },
+          }
+        : undefined,
     });
   };
 
@@ -86,7 +162,7 @@ export async function render(container, { query }) {
     h(
       "div",
       { class: "space-y-5 p-4 sm:p-6" },
-      pageHeader({ icon: "team", title: "Sections", description: `Step 3 of the setup: the sections of SY ${year.name}, with their advisers and rooms.`, crumbs: [{ label: "Home", to: "/dashboard" }, { label: "Sections" }], actions: [h("a", { href: "/reports?tab=advisers", class: "btn btn-outline" }, icon("folder"), "Adviser summary"), h("button", { type: "button", class: "btn btn-primary", onclick: () => sectionForm() }, icon("plus"), "Add section")] }),
+      pageHeader({ icon: "team", title: "Sections", description: `Step 4 of the setup: the sections of SY ${year.name}, each with its adviser and room.`, crumbs: [{ label: "Home", to: "/dashboard" }, { label: "Sections" }], actions: [h("a", { href: "/reports?tab=advisers", class: "btn btn-outline" }, icon("folder"), "Adviser summary"), h("button", { type: "button", class: "btn btn-primary", onclick: () => sectionForm() }, icon("plus"), "Add section")] }),
       content,
     ),
   );

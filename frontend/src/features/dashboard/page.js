@@ -37,7 +37,7 @@ function describeStep(/** @type {any} */ step) {
   switch (step.key) {
     case "teachers": return { title: "Teachers", detail: "Teaching personnel, each in a department.", to: "/teachers", status: plural(counts.teachers, "active teacher") };
     case "subjects": return { title: "Subjects", detail: "The subjects of your grade levels this school year, and activities like Flag Ceremony.", to: "/subjects", status: `${plural(counts.subjects, "subject")} · ${plural(counts.activities, "activity", "activities")}` };
-    case "sections": return { title: "Sections", detail: "This year's sections, each with its adviser.", to: "/sections", status: `${plural(counts.sections, "section")}${counts.without_adviser ? ` · ${counts.without_adviser} without an adviser` : ""}` };
+    case "sections": return { title: "Sections", detail: "This year's sections, each with its adviser and room.", to: "/sections", status: `${plural(counts.sections, "section")}${counts.without_adviser ? ` · ${counts.without_adviser} without an adviser` : ""}${counts.without_room ? ` · ${counts.without_room} without a room` : ""}` };
     case "rooms": return { title: "Rooms & Buildings", detail: "The buildings and rooms classes are held in.", to: "/buildings", status: `${plural(counts.buildings, "building")} · ${plural(counts.rooms, "room")}` };
     case "loading": return { title: "Teacher Loading", detail: "Who teaches each subject of each section.", to: "/teacher-loading", status: `${counts.loaded} of ${counts.needed} subjects have a teacher` };
     default: return { title: "Make the schedule", detail: "Place each section's classes, then submit for approval.", to: "/schedule", status: `${counts.started} of ${counts.sections} started · ${counts.submitted} submitted` };

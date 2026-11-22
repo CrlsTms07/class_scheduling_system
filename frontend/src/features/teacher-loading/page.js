@@ -347,24 +347,28 @@ export async function render(container, { query, navigate }) {
       h(
         "div",
         { class: "space-y-1" },
-        h("div", { class: "h-2 w-full rounded-full bg-surface-muted", role: "meter", "aria-label": `${teacher.name}: ${teacher.assigned} of ${teacher.limit} subjects`, "aria-valuenow": String(teacher.assigned), "aria-valuemin": "0", "aria-valuemax": String(teacher.limit) }, h("div", { class: `h-2 rounded-full ${teacher.is_overloaded ? "bg-danger" : isFull(teacher) ? "bg-amber-500" : "bg-teal-600"}`, style: { width: `${Math.min(100, (teacher.assigned / teacher.limit) * 100)}%` } })),
-        h("p", { class: `text-small ${teacher.is_overloaded ? "font-bold text-danger" : "text-muted-foreground"}` }, `${teacher.assigned} of ${teacher.limit} subjects · ${teacher.hours_per_week} hours a week`),
+        h("div", { class: "h-2 w-full rounded-full bg-surface-muted", role: "meter", "aria-label": `${teacher.name}: ${teacher.assigned} of ${teacher.limit} loads`, "aria-valuenow": String(teacher.assigned), "aria-valuemin": "0", "aria-valuemax": String(teacher.limit) }, h("div", { class: `h-2 rounded-full ${teacher.is_overloaded ? "bg-danger" : isFull(teacher) ? "bg-amber-500" : "bg-teal-600"}`, style: { width: `${Math.min(100, (teacher.assigned / teacher.limit) * 100)}%` } })),
+        h("p", { class: `text-small ${teacher.is_overloaded ? "font-bold text-danger" : "text-muted-foreground"}` }, `${teacher.assigned} / ${teacher.limit} loads`),
+        // Loads = subjects + 1 for an advisory (team decision, Nov 22, 2026).
+        h("p", { class: "text-small text-muted-foreground" }, `${teacher.subjects ?? teacher.assigned} ${(teacher.subjects ?? teacher.assigned) === 1 ? "subject" : "subjects"}`, teacher.advises ? ` + 1 advisory (${teacher.advises})` : ""),
+        h("p", { class: "text-small text-muted-foreground" }, `${teacher.f2f_hours_per_week ?? teacher.hours_per_week} F2F hours a week`, teacher.hours_per_week > (teacher.f2f_hours_per_week ?? teacher.hours_per_week) ? ` · ${teacher.hours_per_week} with async` : ""),
       );
     const status = (/** @type {any} */ teacher) =>
       h("div", { class: "flex flex-wrap gap-1" },
-        teacher.is_overloaded ? h("span", { class: "badge bg-red-100 text-red-900 dark:bg-red-900 dark:text-red-100" }, "Over the limit") : null,
+        teacher.is_overloaded ? h("span", { class: "badge bg-red-100 text-red-900 dark:bg-red-900 dark:text-red-100" }, "Overload") : null,
+        teacher.advises ? h("span", { class: "badge bg-sky-100 text-sky-900 dark:bg-sky-900 dark:text-sky-100" }, "+1 load: adviser") : null,
         !teacher.is_overloaded && isFull(teacher) ? h("span", { class: "badge bg-amber-100 text-amber-900 dark:bg-amber-900 dark:text-amber-100" }, "Full load") : null,
         !isFull(teacher) ? h("span", { class: "badge bg-emerald-100 text-emerald-900 dark:bg-emerald-900 dark:text-emerald-100" }, "OK") : null,
       );
     const fix = (/** @type {any} */ teacher) =>
       teacher.is_overloaded
-        ? h("div", { class: "mt-2 space-y-1 rounded-lg border border-danger/30 p-2 text-small" }, h("p", { class: "font-medium text-danger" }, "How to fix"), h("p", null, "Give one of these subjects to another teacher: open its section below and choose another teacher."))
+        ? h("div", { class: "mt-2 space-y-1 rounded-lg border border-danger/30 p-2 text-small" }, h("p", { class: "font-medium text-danger" }, "How to fix"), h("p", null, "Give one of these subjects to another teacher: open its section below and choose another teacher. An advisory counts as 1 load."))
         : null;
     const loads = (/** @type {any} */ teacher) => h("ul", { class: "space-y-0.5 text-small" }, teacher.loads.map((/** @type {any} */ item) => h("li", null, h("a", { href: `/teacher-loading?section=${item.section_id}`, class: "inline-flex min-h-11 items-center text-brand underline md:min-h-0" }, item.section), `: ${item.subject} (${item.hours_per_week} hrs)`)));
 
     replace(
       content,
-      h("p", { class: "text-sm text-muted-foreground", "aria-live": "polite" }, `${data.summary.teachers} ${data.summary.teachers === 1 ? "teacher" : "teachers"}. A teacher carries at most 5 subjects a term; the hours a week are counted from the subjects.`),
+      h("p", { class: "text-sm text-muted-foreground", "aria-live": "polite" }, `${data.summary.teachers} ${data.summary.teachers === 1 ? "teacher" : "teachers"}. A teacher carries at most 5 loads a term: each subject of a section is 1 load, and an advisory is 1 more. The hours are counted from the schedule.`),
       // Wide screens: a table. Phones: cards.
       h("div", { class: "hidden overflow-x-auto rounded-xl border md:block" },
         h("table", { class: "w-full text-sm" },
