@@ -43,7 +43,7 @@ HTMLDialogElement.prototype.close = function close() {
   this.dispatchEvent(new Event("close"));
 };
 
-const slot = (id, start, end) => ({ id, period_no: id, label: null, start_time: start, end_time: end, minutes: 40, is_break: false });
+const slot = (/** @type {number} */ id, /** @type {string} */ start, /** @type {string} */ end) => ({ id, period_no: id, label: null, start_time: start, end_time: end, minutes: 40, is_break: false });
 const P1 = slot(11, "06:30", "07:10");
 const LAST = slot(12, "15:50", "16:30");
 const PLOTTER = /** @type {any} */ ({
@@ -62,8 +62,13 @@ const PLOTTER = /** @type {any} */ ({
 });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-const click = (element) => element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-const button = (text) => [...document.querySelectorAll("dialog button")].find((item) => item.textContent?.trim() === text);
+/** Clicks an element; fails clearly when it was not found. */
+const click = (/** @type {Element | null | undefined} */ element) => {
+  if (!element) throw new Error("Nothing to click: the element was not found");
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+};
+/** A button of an open dialog with this text, or undefined. */
+const button = (/** @type {string} */ text) => [...document.querySelectorAll("dialog button")].find((item) => item.textContent?.trim() === text);
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -79,7 +84,7 @@ describe("the Add / Edit class dialog", () => {
 
     expect(document.querySelector("dialog [role=radio][aria-checked=true]")?.textContent).toContain("3:50 PM");
 
-    click(/** @type {HTMLElement} */ (button("Add class")));
+    click(button("Add class"));
     await flush();
     await flush();
 
@@ -90,10 +95,10 @@ describe("the Add / Edit class dialog", () => {
   it("waits for the free periods when Add class is pressed right away", async () => {
     /** @type {(value: any) => void} */
     let answer = () => {};
-    api.getFreePeriods.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    vi.mocked(api.getFreePeriods).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
     openClassDialog({ plotter: PLOTTER, termId: 1, target: { day: 5, slot: LAST, loadingId: 50 } });
 
-    click(/** @type {HTMLElement} */ (button("Add class")));
+    click(button("Add class"));
     await flush();
     expect(api.assignSlot).not.toHaveBeenCalled();
 
@@ -104,7 +109,7 @@ describe("the Add / Edit class dialog", () => {
   });
 
   it("shows every period as a block: free ones to choose, full ones disabled with the reason (UI requirement 6)", async () => {
-    api.getFreePeriods.mockResolvedValueOnce([
+    vi.mocked(api.getFreePeriods).mockResolvedValueOnce([
       { slot_id: 11, minutes: 40, free_days: [], busy: [{ day: 5, reason: "Teacher Sample 1 is teaching Grade 7 – Sample A." }] },
       { slot_id: 12, minutes: 40, free_days: [5], busy: [] },
     ]);
@@ -141,7 +146,7 @@ describe("the Add / Edit class dialog", () => {
 
     const form = [...document.querySelectorAll("dialog")].at(-1);
     expect(form?.textContent).toContain("Add a subject to Grade 7 – Sample B");
-    const pick = async (label, option) => {
+    const pick = async (/** @type {string} */ label, /** @type {string} */ option) => {
       click(/** @type {HTMLElement} */ ([...(form?.querySelectorAll("button") ?? [])].find((item) => item.textContent?.startsWith(label) || item.getAttribute("aria-label")?.startsWith(label) || item.closest("div")?.querySelector("label")?.textContent?.startsWith(label) && item.getAttribute("aria-haspopup"))));
       await flush();
       click(/** @type {HTMLElement} */ ([...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes(option))));
