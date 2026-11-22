@@ -35,6 +35,12 @@ class SchoolProfile
         return (object) $profile;
     }
 
+    /** The DepEd seal, printed at the top of every form (Nov 22, 2026), as an embedded image. */
+    public static function depedSealDataUri(): string
+    {
+        return 'data:image/png;base64,'.base64_encode((string) file_get_contents(resource_path('images/deped-seal.png')));
+    }
+
     /** The school's logo, built into the system (it does not change), as an embedded image. */
     public static function logoDataUri(): string
     {

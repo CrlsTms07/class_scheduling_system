@@ -36,6 +36,13 @@ class PeriodService
             throw ValidationException::withMessages(['end_time' => 'The end time must be after the start time.']);
         }
 
+        // Inside the hours of the section's shift (Junior High, Nov 22, 2026).
+        $section->loadMissing('gradeLevel');
+        $problem = \App\Support\ShiftHours::problem($section->gradeLevel->level, (string) $section->shift, $start, $end);
+        if ($problem !== null) {
+            throw ValidationException::withMessages([str_contains($problem, 'start at') ? 'start_time' : 'end_time' => $problem]);
+        }
+
         return DB::transaction(function () use ($section, $days, $start, $end, $isBreak, $label, $user) {
             $section->loadMissing('gradeLevel');
             $this->coverDays($section, $days, $user);

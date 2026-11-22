@@ -29,6 +29,12 @@ class SubjectService
             ->selectRaw('subject_id, COUNT(*) AS total')
             ->groupBy('subject_id')
             ->pluck('total', 'subject_id');
+        // Subjects already on a schedule cannot be deleted; with loading only, the loading goes too.
+        $scheduled = DB::table('schedule_entries')
+            ->join('section_subjects', 'section_subjects.id', '=', 'schedule_entries.section_subject_id')
+            ->distinct()
+            ->pluck('section_subjects.subject_id')
+            ->flip();
 
         return DB::table('subjects')
             ->leftJoin('grade_levels', 'grade_levels.id', '=', 'subjects.grade_level_id')
@@ -46,7 +52,6 @@ class SubjectService
                 'grade_level_id' => $subject->grade_level_id,
                 'level' => $subject->level ?? $subject->grade_level ?? null,
                 'grade' => $subject->grade,
-                'level' => $subject->level,
                 'track_id' => $subject->track_id,
                 'track' => $subject->track,
                 'term_no' => $subject->term_no,
@@ -58,6 +63,10 @@ class SubjectService
                 'is_active' => (bool) $subject->is_active,
                 'locked_reason' => isset($loadingCounts[$subject->id])
                     ? 'This subject already has teacher loading.'
+                    : null,
+                'loading_count' => (int) ($loadingCounts[$subject->id] ?? 0),
+                'delete_blocked_reason' => $scheduled->has($subject->id)
+                    ? 'It is already on a schedule.'
                     : null,
             ])
             ->all();
@@ -123,9 +132,24 @@ class SubjectService
         });
     }
 
-    public function delete(Subject $subject, User $user): void
+    /**
+     * Deletes a subject. One with teacher loading but no class on any schedule goes with its loading
+     * when $withLoading is set (Nov 22, 2026); one already on a schedule stays.
+     */
+    public function delete(Subject $subject, User $user, bool $withLoading = false): void
     {
-        if ($this->hasLoading($subject)) {
+        $isScheduled = DB::table('schedule_entries')
+            ->join('section_subjects', 'section_subjects.id', '=', 'schedule_entries.section_subject_id')
+            ->where('section_subjects.subject_id', $subject->id)
+            ->exists();
+
+        if ($isScheduled) {
+            throw ValidationException::withMessages([
+                'subject' => 'This subject is already on a schedule. Remove its classes first, or mark it as not offered.',
+            ]);
+        }
+
+        if ($this->hasLoading($subject) && ! $withLoading) {
             throw ValidationException::withMessages([
                 'subject' => 'This subject already has teacher loading. Mark it as not offered instead.',
             ]);
@@ -133,6 +157,11 @@ class SubjectService
 
         DB::transaction(function () use ($subject, $user) {
             $before = $subject->only(['name', 'school_year_id', 'grade_level_id']);
+            $loading = DB::table('section_subjects')->where('subject_id', $subject->id)->get(['id', 'section_id', 'term_id', 'teacher_id']);
+            foreach ($loading as $row) {
+                DB::table('section_subjects')->where('id', $row->id)->delete();
+                $this->audit->log($user, 'delete', 'section_subjects', $row->id, (array) $row);
+            }
             $subject->delete();
 
             $this->audit->log($user, 'delete', 'subjects', $subject->id, $before);

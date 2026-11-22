@@ -3,12 +3,14 @@
 namespace App\Http\Requests;
 
 use App\Models\DayPattern;
+use App\Support\ShiftHours;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
 /**
- * A whole bell schedule at once, from a preset (8, 10, 14 or 16 rows). Only for a bell
- * schedule that has no periods yet, so nothing already plotted can change.
+ * A whole bell schedule at once, from a preset (8, 10, 14 or 16 rows), or the Senior High blocks
+ * ("preset": "shs_blocks", rows from config/school.php, Nov 22, 2026). Only for a bell schedule
+ * that has no periods yet, so nothing already plotted can change.
  */
 class PresetSlotsRequest extends FormRequest
 {
@@ -19,13 +21,23 @@ class PresetSlotsRequest extends FormRequest
         return $this->user()->can('manage', [DayPattern::class, $pattern?->level]);
     }
 
+    /** The Senior High blocks are read from the config, so they are written in one place only. */
+    protected function prepareForValidation(): void
+    {
+        if ($this->input('preset') === 'shs_blocks') {
+            $this->merge(['slots' => config('school.shs_blocks')]);
+        }
+    }
+
     /**
      * @return array<string, mixed>
      */
     public function rules(): array
     {
         return [
+            'preset' => ['nullable', 'in:shs_blocks'],
             'slots' => ['required', 'array', 'min:1', 'max:20'],
+            'slots.*.is_async' => ['sometimes', 'boolean'],
             'slots.*.is_break' => ['required', 'boolean'],
             'slots.*.label' => ['nullable', 'string', 'max:40'],
             'slots.*.start_time' => ['required', 'date_format:H:i'],
@@ -46,6 +58,12 @@ class PresetSlotsRequest extends FormRequest
                 return;
             }
 
+            if ($this->route('dayPattern')->level !== 'SHS' && collect($this->input('slots'))->contains(fn ($slot) => ! empty($slot['is_async']))) {
+                $validator->errors()->add('slots', 'Asynchronous sessions and the Senior High blocks are for Senior High bell schedules only.');
+
+                return;
+            }
+
             $previousEnd = '00:00';
 
             foreach ($this->input('slots') as $index => $slot) {
@@ -60,6 +78,16 @@ class PresetSlotsRequest extends FormRequest
                 }
 
                 $previousEnd = $slot['end_time'];
+            }
+
+            // Inside the hours of the shift (Junior High, Nov 22, 2026): said once, for the first row out.
+            $pattern = $this->route('dayPattern');
+            foreach ($this->input('slots') as $slot) {
+                $problem = ShiftHours::problem($pattern->level, $pattern->shift, $slot['start_time'], $slot['end_time']);
+                if ($problem !== null) {
+                    $validator->errors()->add('slots', $problem.' Use fewer rows, shorter periods or an earlier start.');
+                    break;
+                }
             }
         }];
     }

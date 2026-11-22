@@ -79,13 +79,16 @@ class TeacherController extends Controller
         return response()->json(['message' => 'The record was deleted.']);
     }
 
-    /** A teacher of the other department only is changed by the Admin, not by a scheduler. */
+    /**
+     * A Chairperson changes Junior High teachers, the Master Teacher Senior High ones, the Admin all
+     * (team decision, Nov 22, 2026).
+     */
     private function ensureOwnDepartment(Request $request, SchoolTerm $term, Teacher $teacher, TeacherService $service): void
     {
         abort_if(
-            $service->otherDepartmentOnly($term, $request->user())->contains($teacher->id),
+            $service->viewOnlyFor($term, $request->user())->contains($teacher->id),
             403,
-            'This teacher teaches only in the other department. The Admin keeps this record up to date.',
+            'This teacher belongs to the other level (Junior High or Senior High). Only their own Chairperson or Master Teacher, or the Admin, can change this record.',
         );
     }
 }

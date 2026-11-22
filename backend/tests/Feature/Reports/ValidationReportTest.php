@@ -78,7 +78,7 @@ it('lists the issues of each section, with the summary', function () {
         ->assertJsonPath('data.summary.not_acknowledged', 3)
         ->assertJsonPath('data.sections.0.label', 'Grade 7 – Honesty')
         ->assertJsonPath('data.sections.0.status_label', 'Draft')
-        ->assertJsonPath('data.sections.0.issues.0.message', 'Homeroom Guidance has 20 minutes too many a week (80 scheduled, at most 60).')
+        ->assertJsonPath('data.sections.0.issues.0.message', 'Homeroom Guidance has 40 minutes too many a week (80 scheduled, at most 40).')
         ->assertJsonPath('data.sections.0.issues.0.level', 'Urgent')
         ->assertJsonPath('data.sections.1.issues.0.message', 'This section has no adviser.');
 });

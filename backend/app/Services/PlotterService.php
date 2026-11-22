@@ -9,6 +9,7 @@ use App\Models\ScheduleEntry;
 use App\Models\Section;
 use App\Models\SectionSubject;
 use App\Models\User;
+use App\Support\Curriculum;
 use App\Support\ScheduleFormat;
 use Illuminate\Support\Facades\DB;
 
@@ -41,6 +42,8 @@ class PlotterService
                 'level' => $section->gradeLevel->level,
                 'grade' => $section->gradeLevel->grade,
                 'shift' => $section->shift,
+                // The hours its shift may use, for the check of a typed time (null: no limit).
+                'shift_window' => \App\Support\ShiftHours::window($section->gradeLevel->level, (string) $section->shift),
                 'adviser' => $section->adviser?->printedName(),
                 'home_room_id' => $section->home_room_id,
             ],
@@ -128,6 +131,29 @@ class PlotterService
             ->where('section_id', $section->id)
             ->pluck('scheduled_minutes', 'section_subject_id');
 
+        // On how many days each subject is on the schedule: a subject is complete when its days
+        // reach the sessions of its target, so a shorter Friday period still counts.
+        $days = DB::table('schedule_entries')
+            ->where('term_id', $termId)
+            ->where('section_id', $section->id)
+            ->where('status', '<>', 'rejected')
+            ->whereNotNull('section_subject_id')
+            ->groupBy('section_subject_id')
+            // Face-to-face days only: a Senior High asynchronous session is not a block (Nov 22, 2026).
+            ->selectRaw('section_subject_id, COUNT(DISTINCT day_of_week) FILTER (WHERE NOT is_async) AS days')
+            ->pluck('days', 'section_subject_id');
+        // Senior High asynchronous minutes, shown apart from the face-to-face ones.
+        $async = DB::table('schedule_entries')
+            ->where('term_id', $termId)
+            ->where('section_id', $section->id)
+            ->where('status', '<>', 'rejected')
+            ->where('is_async', true)
+            ->whereNotNull('section_subject_id')
+            ->groupBy('section_subject_id')
+            ->selectRaw('section_subject_id, SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60)::INT AS minutes')
+            ->pluck('minutes', 'section_subject_id');
+        $level = $section->gradeLevel->level;
+
         return SectionSubject::with(['subject', 'teacher'])
             ->where('term_id', $termId)
             ->where('section_id', $section->id)
@@ -139,9 +165,13 @@ class PlotterService
                 'teacher_id' => $loading->teacher_id,
                 'subject' => $loading->subject->name,
                 'is_priority' => $loading->subject->is_priority,
-                // No typed minutes any more (Nov 21, 2026): only Homeroom has a limit.
-                'required_minutes' => $loading->subject->isHomeroom() ? (int) config('school.homeroom_minutes') : null,
+                // No typed minutes any more (Nov 21, 2026): only Homeroom has a limit (40 JHS, 60 SHS).
+                'required_minutes' => $loading->subject->isHomeroom() ? Curriculum::homeroomMinutes($level) : null,
                 'scheduled_minutes' => (int) ($scheduled[$loading->id] ?? 0),
+                'scheduled_async_minutes' => (int) ($async[$loading->id] ?? 0),
+                // The MATATAG weekly target, a guide only (config/curriculum.php, Nov 21, 2026).
+                'target' => Curriculum::targetFor($loading->subject->name, $level),
+                'days_placed' => (int) ($days[$loading->id] ?? 0),
                 'teacher' => $loading->teacher->printedName(),
             ])
             ->values();

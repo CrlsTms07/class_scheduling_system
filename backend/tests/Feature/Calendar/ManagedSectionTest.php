@@ -29,6 +29,10 @@ function sectionGradeId(int $grade): int
     return DB::table('grade_levels')->where('grade', $grade)->value('id');
 }
 
+/**
+ * A valid section: the adviser and the room are required (Nov 21, 2026), so each body gets a teacher
+ * of its own (one advisory per teacher a year) and the test's room, unless the test says otherwise.
+ */
 function sectionBody(array $overrides = []): array
 {
     return [
@@ -36,8 +40,8 @@ function sectionBody(array $overrides = []): array
         'name' => 'Honesty',
         'shift' => 'WHOLE_DAY',
         'track_id' => null,
-        'adviser_id' => null,
-        'home_room_id' => null,
+        'adviser_id' => array_key_exists('adviser_id', $overrides) ? null : DB::table('teachers')->insertGetId(['first_name' => 'Adviser', 'last_name' => uniqid()]),
+        'home_room_id' => test()->roomId,
         'class_size' => null,
         ...$overrides,
     ];
@@ -101,9 +105,9 @@ it('creates a JHS section with adviser, room and class size, and writes an audit
     expect(DB::table('audit_logs')->where('table_name', 'sections')->where('action', 'create')->exists())->toBeTrue();
 });
 
-it('creates an SHS section with a track and no home room', function () {
+it('creates an SHS section with a track and a strand', function () {
     $this->postJson("/api/school-years/{$this->yearId}/sections", sectionBody([
-        'grade_level_id' => sectionGradeId(11), 'track_id' => $this->trackId, 'shift' => 'AM',
+        'grade_level_id' => sectionGradeId(11), 'track_id' => $this->trackId, 'shift' => 'AM', 'strand' => 'STEM',
     ]))
         ->assertCreated()
         ->assertJsonPath('data.level', 'SHS')
@@ -121,7 +125,7 @@ it('keeps the strand of a Senior High section, and refuses one for Junior High',
 });
 
 it('allows the part-time shift for Senior High only', function () {
-    $this->postJson("/api/school-years/{$this->yearId}/sections", sectionBody(['grade_level_id' => sectionGradeId(11), 'shift' => 'PART_TIME', 'name' => 'Part']))
+    $this->postJson("/api/school-years/{$this->yearId}/sections", sectionBody(['grade_level_id' => sectionGradeId(11), 'shift' => 'PART_TIME', 'name' => 'Part', 'track_id' => $this->trackId, 'strand' => 'STEM']))
         ->assertCreated();
     $this->postJson("/api/school-years/{$this->yearId}/sections", sectionBody(['shift' => 'PART_TIME', 'name' => 'Junior Part']))
         ->assertUnprocessable()
@@ -165,7 +169,7 @@ it('keeps a teacher who is a co-adviser from being deleted', function () {
 
 it('lets an SHS section have a usual room', function () {
     $this->postJson("/api/school-years/{$this->yearId}/sections", sectionBody([
-        'grade_level_id' => sectionGradeId(11), 'track_id' => $this->trackId, 'shift' => 'AM', 'home_room_id' => $this->roomId,
+        'grade_level_id' => sectionGradeId(11), 'track_id' => $this->trackId, 'shift' => 'AM', 'strand' => 'STEM', 'home_room_id' => $this->roomId,
     ]))
         ->assertCreated()
         ->assertJsonPath('data.home_room', 'Main – 101');
@@ -201,7 +205,17 @@ it('rejects bad sections', function (callable $change, string $field) {
     'unknown shift' => [fn ($test) => ['shift' => 'NIGHT'], 'shift'],
     'negative class size' => [fn ($test) => ['class_size' => -1], 'class_size'],
     'track on a JHS section' => [fn ($test) => ['track_id' => $test->trackId], 'track_id'],
+    'no adviser' => [fn ($test) => ['adviser_id' => null], 'adviser_id'],
+    'no room' => [fn ($test) => ['home_room_id' => null], 'home_room_id'],
+    'Senior High without a track' => [fn ($test) => ['grade_level_id' => sectionGradeId(11), 'strand' => 'STEM'], 'track_id'],
+    'Senior High without a strand' => [fn ($test) => ['grade_level_id' => sectionGradeId(11), 'track_id' => $test->trackId, 'strand' => '  '], 'strand'],
 ]);
+
+it('says which required field is missing, in plain words', function () {
+    $this->postJson("/api/school-years/{$this->yearId}/sections", sectionBody(['adviser_id' => null, 'home_room_id' => null]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['adviser_id' => 'Choose the adviser of this section.', 'home_room_id' => 'Choose the room of this section.']);
+});
 
 it('allows the same name in another grade or another school year', function () {
     insertSection($this, ['name' => 'Honesty']);
@@ -271,11 +285,35 @@ describe('once a section has teacher loading', function () {
         ]))->assertOk()->assertJsonPath('data.name', 'Renamed');
     });
 
-    it('cannot be deleted', function () {
+    it('cannot be deleted without saying the loading goes too', function () {
         $this->deleteJson("/api/sections/{$this->sectionId}")
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['section' => 'teacher loading']);
     });
+
+    it('is deleted with its loading when it has no schedule (Nov 22, 2026)', function () {
+        $this->getJson("/api/school-years/{$this->yearId}/sections")
+            ->assertJsonPath('data.0.loading_count', 1)
+            ->assertJsonPath('data.0.delete_blocked_reason', null);
+
+        $this->deleteJson("/api/sections/{$this->sectionId}?with_loading=1")->assertOk();
+
+        expect(DB::table('sections')->count())->toBe(0)
+            ->and(DB::table('section_subjects')->count())->toBe(0);
+    });
+});
+
+it('keeps a section with schedules, even with the loading allowed to go', function () {
+    $sectionId = insertSection($this);
+    DB::table('schedule_entries')->insert([
+        'term_id' => $this->termId, 'section_id' => $sectionId, 'created_by' => $this->admin->id,
+        'day_of_week' => 1, 'start_time' => '07:00', 'end_time' => '07:45',
+    ]);
+
+    $this->getJson("/api/school-years/{$this->yearId}/sections")->assertJsonPath('data.0.delete_blocked_reason', 'This section already has schedules.');
+    $this->deleteJson("/api/sections/{$sectionId}?with_loading=1")
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['section' => 'schedules']);
 });
 
 it('locks a section that has schedules, even open slots', function () {

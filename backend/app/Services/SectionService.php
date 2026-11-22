@@ -56,12 +56,25 @@ class SectionService
         });
     }
 
-    public function delete(Section $section, User $admin): void
+    /**
+     * Deletes a section. One with teacher loading but no schedule goes with its loading when
+     * $withLoading is set (Nov 22, 2026); one with schedules stays.
+     */
+    public function delete(Section $section, User $admin, bool $withLoading = false): void
     {
-        DB::transaction(function () use ($section, $admin) {
-            $reason = $this->whyLocked($section);
+        DB::transaction(function () use ($section, $admin, $withLoading) {
+            $reason = $this->whyCannotDelete($section);
+            if ($reason === null && ! $withLoading && DB::table('section_subjects')->where('section_id', $section->id)->exists()) {
+                $reason = 'This section already has teacher loading.';
+            }
             if ($reason !== null) {
                 throw ValidationException::withMessages(['section' => $reason]);
+            }
+
+            $loading = DB::table('section_subjects')->where('section_id', $section->id)->get(['id', 'subject_id', 'term_id', 'teacher_id']);
+            foreach ($loading as $row) {
+                DB::table('section_subjects')->where('id', $row->id)->delete();
+                $this->audit->log($admin, 'delete', 'section_subjects', $row->id, (array) $row);
             }
 
             $before = $section->only(['name', 'school_year_id', 'grade_level_id']);
@@ -69,6 +82,17 @@ class SectionService
 
             $this->audit->log($admin, 'delete', 'sections', $section->id, $before);
         });
+    }
+
+    /**
+     * What keeps this section from being deleted, or null. Teacher loading alone does not: it can be
+     * deleted with the section.
+     */
+    public function whyCannotDelete(Section $section): ?string
+    {
+        return DB::table('schedule_entries')->where('section_id', $section->id)->exists()
+            ? 'This section already has schedules.'
+            : null;
     }
 
     /**

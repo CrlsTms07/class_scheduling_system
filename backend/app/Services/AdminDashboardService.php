@@ -75,7 +75,7 @@ class AdminDashboardService
             ->where('term_id', $term->id)
             ->where('is_overloaded', true)
             ->when($teacherIds !== null, fn ($query) => $query->whereIn('teacher_id', $teacherIds))
-            ->orderByDesc('subject_count')
+            ->orderByDesc('loads')
             ->get();
 
         $teachers = Teacher::whereIn('id', $rows->pluck('teacher_id'))->get()->keyBy('id');
@@ -83,7 +83,10 @@ class AdminDashboardService
         return $rows->map(fn ($row) => [
             'id' => $row->teacher_id,
             'name' => $teachers[$row->teacher_id]->printedName(),
-            'assigned' => (int) $row->subject_count,
+            // Loads: subjects plus 1 for an advisory (Nov 22, 2026).
+            'assigned' => (int) $row->loads,
+            'subjects' => (int) $row->subject_count,
+            'adviser_credit' => (int) $row->adviser_credit,
             'limit' => (int) $row->max_subjects,
         ])->all();
     }

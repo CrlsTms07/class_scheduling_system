@@ -60,10 +60,11 @@ class ConflictService
 
     /**
      * Teaching personnel who are free at this time, for when the chosen teacher is not.
-     * Those who already teach this subject in the term come first, then the lightest load.
+     * Those who already teach this subject in the term come first, then the lightest load. A teacher
+     * this class would take past 6 hours on one of its days comes last, marked (RA 4670, Nov 21, 2026).
      *
      * @param  array<int, int>  $days
-     * @return array<int, array{id: int, name: string, teaches_subject: bool, hours_per_week: float}>
+     * @return array<int, array{id: int, name: string, teaches_subject: bool, hours_per_week: float, over_day_limit: bool}>
      */
     public function availableTeachers(int $termId, Section $section, array $days, string $start, string $end, int $exceptTeacherId, ?int $subjectId = null): array
     {
@@ -83,12 +84,19 @@ class ConflictService
             ->pluck('section_subjects.teacher_id')
             ->flip();
 
-        $minutes = DB::table('section_subjects')
-            ->join('subjects', 'subjects.id', '=', 'section_subjects.subject_id')
-            ->where('section_subjects.term_id', $termId)
-            ->groupBy('section_subjects.teacher_id')
-            ->selectRaw('section_subjects.teacher_id, COUNT(*) AS minutes')
-            ->pluck('minutes', 'teacher_id');
+        // Teaching minutes on the schedule: a week, and on each day of this class.
+        $teaching = DB::table('schedule_entries')
+            ->where('term_id', $termId)
+            ->where('status', '<>', 'rejected')
+            ->whereNotNull('teacher_id')
+            ->groupBy('teacher_id', 'day_of_week')
+            ->selectRaw('teacher_id, day_of_week, SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60)::INT AS minutes')
+            ->get();
+        $minutes = $teaching->groupBy('teacher_id')->map(fn ($rows) => $rows->sum('minutes'));
+        $busiestDay = $teaching->whereIn('day_of_week', $days)->groupBy('teacher_id')->map(fn ($rows) => $rows->max('minutes'));
+        $dayLimit = (int) config('school.teacher_day_minutes');
+        $classMinutes = ScheduleFormat::minutesBetween($start, $end);
+        $isOverDay = fn (int $teacherId) => (int) ($busiestDay[$teacherId] ?? 0) + $classMinutes > $dayLimit;
 
         return Teacher::where('personnel_type', 'teaching')
             ->where('is_active', true)
@@ -96,6 +104,7 @@ class ConflictService
             ->when($section->shift !== 'WHOLE_DAY', fn (Builder $query) => $query->whereIn('shift', [$section->shift, 'WHOLE_DAY']))
             ->get()
             ->sortBy([
+                fn (Teacher $a, Teacher $b) => $isOverDay($a->id) <=> $isOverDay($b->id),
                 fn (Teacher $a, Teacher $b) => $teachesIt->has($b->id) <=> $teachesIt->has($a->id),
                 fn (Teacher $a, Teacher $b) => (int) ($minutes[$a->id] ?? 0) <=> (int) ($minutes[$b->id] ?? 0),
                 fn (Teacher $a, Teacher $b) => [$a->last_name, $a->first_name, $a->id] <=> [$b->last_name, $b->first_name, $b->id],
@@ -106,6 +115,7 @@ class ConflictService
                 'name' => $teacher->printedName(),
                 'teaches_subject' => $teachesIt->has($teacher->id),
                 'hours_per_week' => round(((int) ($minutes[$teacher->id] ?? 0)) / 60, 1),
+                'over_day_limit' => $isOverDay($teacher->id),
             ])
             ->values()
             ->all();

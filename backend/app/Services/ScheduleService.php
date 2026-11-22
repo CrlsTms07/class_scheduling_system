@@ -8,7 +8,9 @@ use App\Models\Section;
 use App\Models\SectionSubject;
 use App\Models\TimeSlot;
 use App\Models\User;
+use App\Support\Curriculum;
 use App\Support\ScheduleFormat;
+use Illuminate\Support\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Exceptions\HttpResponseException;
@@ -34,10 +36,11 @@ class ScheduleService
     public function assign(int $termId, Section $section, TimeSlot $slot, SectionSubject $loading, ?int $roomId, array $days, User $user): void
     {
         $this->rejectUnlessEditable($termId, $section);
-        $this->stopOnConflict($termId, $section, $slot, $loading->teacher_id, $roomId, $days, $loading->subject_id);
+        $end = $this->endIn($slot, $loading, $section);
+        $this->stopOnConflict($termId, $section, $slot, $loading->teacher_id, $roomId, $days, $loading->subject_id, $end);
 
         try {
-            DB::transaction(function () use ($termId, $section, $slot, $loading, $roomId, $days, $user) {
+            DB::transaction(function () use ($termId, $section, $slot, $loading, $roomId, $days, $user, $end) {
                 $this->ownEntries($termId, $section, $slot, $days)->delete();
 
                 foreach ($days as $day) {
@@ -50,7 +53,7 @@ class ScheduleService
                         'is_async' => (bool) $slot->is_async,
                         'day_of_week' => $day,
                         'start_time' => $slot->start_time,
-                        'end_time' => $slot->end_time,
+                        'end_time' => $end,
                         'created_by' => $user->id,
                     ]);
                 }
@@ -61,7 +64,7 @@ class ScheduleService
             }
 
             // Another user saved the same teacher or room after our check above.
-            $this->stopOnConflict($termId, $section, $slot, $loading->teacher_id, $roomId, $days, $loading->subject_id);
+            $this->stopOnConflict($termId, $section, $slot, $loading->teacher_id, $roomId, $days, $loading->subject_id, $end);
 
             throw $exception;
         }
@@ -82,7 +85,8 @@ class ScheduleService
             ->where('section_id', $section->id)
             ->whereIn('day_of_week', $fromDays)
             ->where('start_time', $from->start_time)
-            ->where('end_time', $from->end_time)
+            // A Homeroom class may end before its period does (it takes only its minutes).
+            ->where('end_time', '<=', $from->end_time)
             ->whereNotNull('section_subject_id')
             ->get()
             ->keyBy('day_of_week');
@@ -103,7 +107,7 @@ class ScheduleService
         $stopOnAnyConflict = function () use ($termId, $section, $to, $fromDays, $toDays, $entries) {
             foreach ($fromDays as $index => $fromDay) {
                 $entry = $entries[$fromDay];
-                $this->stopOnConflict($termId, $section, $to, (int) $entry->teacher_id, $to->is_async || $entry->room_id === null ? null : (int) $entry->room_id, [$toDays[$index]], $entry->sectionSubject?->subject_id);
+                $this->stopOnConflict($termId, $section, $to, (int) $entry->teacher_id, $to->is_async || $entry->room_id === null ? null : (int) $entry->room_id, [$toDays[$index]], $entry->sectionSubject?->subject_id, $entry->sectionSubject ? $this->endIn($to, $entry->sectionSubject, $section) : null);
             }
         };
 
@@ -119,7 +123,7 @@ class ScheduleService
                     $entries[$fromDay]->update([
                         'day_of_week' => $toDays[$index],
                         'start_time' => $to->start_time,
-                        'end_time' => $to->end_time,
+                        'end_time' => $entries[$fromDay]->sectionSubject ? $this->endIn($to, $entries[$fromDay]->sectionSubject, $section) : $to->end_time,
                         // Into an asynchronous period: no room. Out of one: a room is chosen after.
                         'is_async' => (bool) $to->is_async,
                         ...($to->is_async ? ['room_id' => null] : []),
@@ -294,9 +298,30 @@ class ScheduleService
     /**
      * @param  array<int, int>  $days
      */
-    private function stopOnConflict(int $termId, Section $section, TimeSlot $slot, int $teacherId, ?int $roomId, array $days, ?int $subjectId = null): void
+    /**
+     * When a class ends in a period: at the period's end, except Homeroom Guidance in a longer
+     * period, which takes only its minutes from the start (40 in Junior High, 60 in Senior High;
+     * team decision, Nov 22, 2026). Like the school's class program, where HGP sits in the 6:00 – 8:00
+     * block but counts 60 minutes. The bell schedule itself does not change.
+     */
+    public function endIn(TimeSlot $slot, SectionSubject $loading, Section $section): string
     {
-        $conflicts = $this->conflicts->findConflicts($termId, $section, $teacherId, $roomId, $days, $slot->start_time, $slot->end_time);
+        $loading->loadMissing('subject');
+        if (! $loading->subject?->isHomeroom()) {
+            return $slot->end_time;
+        }
+
+        $limit = Curriculum::homeroomMinutes($section->gradeLevel->level);
+        if (ScheduleFormat::minutesBetween($slot->start_time, $slot->end_time) <= $limit) {
+            return $slot->end_time;
+        }
+
+        return Carbon::parse($slot->start_time)->addMinutes($limit)->format('H:i:s');
+    }
+
+    private function stopOnConflict(int $termId, Section $section, TimeSlot $slot, int $teacherId, ?int $roomId, array $days, ?int $subjectId = null, ?string $end = null): void
+    {
+        $conflicts = $this->conflicts->findConflicts($termId, $section, $teacherId, $roomId, $days, $slot->start_time, $end ?? $slot->end_time);
 
         if ($conflicts !== []) {
             throw new ScheduleConflictException(

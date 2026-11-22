@@ -35,7 +35,8 @@ class ReportSettingsService
     }
 
     /**
-     * The logos as embedded images, in printing order. The first one is the school's own.
+     * The logos as embedded images, in printing order. With none uploaded, the header has the DepEd
+     * seal and the footer the school's logo, as on the official forms (Nov 22, 2026).
      * The PDF library and the browser both read these directly.
      *
      * @return array<int, string>
@@ -49,8 +50,14 @@ class ReportSettingsService
             ->map(fn ($logo) => "data:{$logo->mime_type};base64,{$logo->image_base64}")
             ->all();
 
-        // The school's logo is built into the system, so no one has to upload it (Nov 21, 2026).
-        return $saved === [] && $placement === 'header' ? [\App\Support\SchoolProfile::logoDataUri()] : $saved;
+        // Both are built into the system, so no one has to upload them.
+        if ($saved !== []) {
+            return $saved;
+        }
+
+        return $placement === 'header'
+            ? [\App\Support\SchoolProfile::depedSealDataUri()]
+            : [\App\Support\SchoolProfile::logoDataUri()];
     }
 
     /** The campus photo on the landing page. Kept in the database, like the logos. */

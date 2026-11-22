@@ -32,7 +32,7 @@ class TeacherService
     public function listFor(SchoolTerm $term, ?User $viewer = null): array
     {
         $viewer ??= auth()->user();
-        $readOnly = $viewer ? $this->otherDepartmentOnly($term, $viewer)->flip() : collect();
+        $readOnly = $viewer ? $this->viewOnlyFor($term, $viewer)->flip() : collect();
 
         $loads = DB::table('section_subjects')
             ->where('term_id', $term->id)
@@ -70,18 +70,12 @@ class TeacherService
             ->groupBy('teacher_id')
             ->map(fn ($rows) => $rows->pluck('level')->unique()->sort()->values()->all());
 
-        $own = $viewer?->departmentsInScope();
         $departmentLevels = DB::table('departments')->pluck('level', 'id');
 
-        // Teaching personnel only (team decision, Nov 21, 2026). A Chairperson or Master Teacher sees
-        // the teachers of their own level: by department, or by classes or an advisory there, or
-        // with no department level yet (Nov 21, 2026).
+        // Teaching personnel only (team decision, Nov 21, 2026). Everyone sees every teacher (team
+        // decision, Nov 22, 2026); a Chairperson or Master Teacher edits only those of their own level.
         return Teacher::where('personnel_type', 'teaching')
             ->get()
-            ->filter(fn (Teacher $teacher) => $own === null
-                || ($departmentLevels[$teacher->department_id] ?? null) === null
-                || in_array($departmentLevels[$teacher->department_id], $own, true)
-                || array_intersect($levels->get($teacher->id, []), $own) !== [])
             ->sortBy(fn (Teacher $teacher) => [$teacher->last_name, $teacher->first_name])
             ->values()
             ->map(fn (Teacher $teacher) => [
@@ -96,6 +90,9 @@ class TeacherService
                 'department_id' => $teacher->department_id,
                 'department' => $departments[$teacher->department_id] ?? null,
                 'department_level' => $departmentLevels[$teacher->department_id] ?? null,
+                // Where the teacher belongs: their department's level, or where they teach when the
+                // department has no level yet (shown beside the name, Nov 22, 2026).
+                'home_level' => $departmentLevels[$teacher->department_id] ?? (count($levels->get($teacher->id, [])) === 1 ? $levels->get($teacher->id)[0] : null),
                 'designation_id' => $teacher->designation_id,
                 'designation' => $designations[$teacher->designation_id] ?? null,
                 'shift' => $teacher->shift,
@@ -103,7 +100,7 @@ class TeacherService
                 'is_active' => $teacher->is_active,
                 'account_email' => $accounts[$teacher->user_id] ?? null,
                 'advisory' => $advisories->get($teacher->id)?->labelFor($viewer),
-                // Only the Admin edits a teacher who teaches only in the other department.
+                // A Chairperson edits Junior High teachers, the Master Teacher Senior High ones, the Admin all.
                 'can_edit' => ! $readOnly->has($teacher->id),
                 'assigned' => (int) ($loads[$teacher->id] ?? 0),
                 'task_ids' => ($tasks[$teacher->id] ?? collect())->pluck('task_id')->map(fn ($id) => (int) $id)->values(),
@@ -349,6 +346,36 @@ class TeacherService
     {
         // The load limit is one for the whole school, not chosen per teacher.
         return [...collect($data)->except(['qualifications', 'task_ids', 'max_subjects', 'department_level'])->all(), 'max_subjects' => (int) config('school.max_subjects')];
+    }
+
+    /**
+     * The teachers a Chairperson or Master Teacher may see but not change (team decision, Nov 22,
+     * 2026): those of a department of the other level (a Junior High teacher for the Master Teacher,
+     * a Senior High one for a Chairperson). A teacher whose department has no level yet goes by
+     * where they teach. The Admin changes everyone. Giving a class to a teacher of the other level
+     * stays possible in Teacher Loading ("From Junior High"); only the record is kept by their own side.
+     *
+     * @return \Illuminate\Support\Collection<int, int>
+     */
+    public function viewOnlyFor(SchoolTerm $term, User $viewer): \Illuminate\Support\Collection
+    {
+        $own = $viewer->departmentsInScope();
+        if ($own === null) {
+            return collect();
+        }
+
+        $departmentLevels = DB::table('departments')->pluck('level', 'id');
+        $byClasses = $this->otherDepartmentOnly($term, $viewer)->flip();
+
+        return Teacher::where('personnel_type', 'teaching')
+            ->get(['id', 'department_id'])
+            ->filter(function (Teacher $teacher) use ($own, $departmentLevels, $byClasses) {
+                $level = $departmentLevels[$teacher->department_id] ?? null;
+
+                return $level !== null ? ! in_array($level, $own, true) : $byClasses->has($teacher->id);
+            })
+            ->pluck('id')
+            ->values();
     }
 
     /**

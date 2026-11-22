@@ -104,7 +104,7 @@ class ManagedSectionController extends Controller
     {
         Gate::authorize('manage', [Section::class, $section->grade_level_id]);
 
-        $service->delete($section, $request->user());
+        $service->delete($section, $request->user(), $request->boolean('with_loading'));
 
         return response()->json(['message' => "{$section->name} was deleted."]);
     }

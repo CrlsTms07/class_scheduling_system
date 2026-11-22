@@ -64,9 +64,9 @@ class SchedulerDashboardService
 
     /**
      * The steps of making a schedule, in the order of the Setup menu, each with how far along it is
-     * (one order everywhere, after the beneficiary's review, Nov 21, 2026): 1 Teachers, 2 Subjects,
-     * 3 Sections, 4 Rooms, 5 Teacher Loading, 6 Plot and submit. The class times are chosen while
-     * plotting, so the bell schedule is not a step of its own.
+     * (one order everywhere, after the beneficiary's review, Nov 21, 2026): 1 Teachers, 2 Subjects &
+     * Class Hours, 3 Rooms, 4 Sections, 5 Teacher Loading, 6 Plot and submit. Each step needs only
+     * the ones before it: a section needs its adviser (a teacher) and its room.
      *
      * @param  array<int, int>  $scope
      * @return array<int, array{key: string, done: bool, counts: array<string, int>}>
@@ -118,12 +118,16 @@ class SchedulerDashboardService
                     'activities' => Activity::where('school_year_id', $term->school_year_id)->visibleTo($user)->count(),
                 ],
             ],
+            $rooms,
             [
                 'key' => 'sections',
-                'done' => $models->isNotEmpty() && $models->every(fn (Section $section) => $section->adviser_id !== null),
-                'counts' => ['sections' => $models->count(), 'without_adviser' => $models->whereNull('adviser_id')->count()],
+                'done' => $models->isNotEmpty() && $models->every(fn (Section $section) => $section->adviser_id !== null && $section->home_room_id !== null),
+                'counts' => [
+                    'sections' => $models->count(),
+                    'without_adviser' => $models->whereNull('adviser_id')->count(),
+                    'without_room' => $models->whereNull('home_room_id')->count(),
+                ],
             ],
-            $rooms,
             [
                 'key' => 'loading',
                 'done' => $models->isNotEmpty() && $everySectionLoaded && $loaded >= $needed,

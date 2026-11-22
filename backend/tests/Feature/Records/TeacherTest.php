@@ -270,12 +270,29 @@ describe('departments of each level (Nov 21, 2026)', function () {
         $this->master->gradeLevels()->sync([DB::table('grade_levels')->where('grade', 11)->value('id')]);
     });
 
-    it('shows the Master Teacher only Senior High departments and teachers', function () {
+    it('shows the Master Teacher only Senior High departments, and every teacher with only Senior High ones to edit', function () {
         $this->actingAs($this->master);
+        $teachers = collect($this->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->keyBy('first_name');
 
         expect(collect($this->getJson('/api/personnel-options')->json('data.departments'))->pluck('name')->all())->not->toContain('Department of Mathematics')
-            ->and(collect($this->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->pluck('first_name')->all())->toContain('Senior')
-            ->and(collect($this->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->pluck('first_name')->all())->not->toContain('Junior');
+            ->and($teachers['Senior']['home_level'])->toBe('SHS')
+            ->and($teachers['Senior']['can_edit'])->toBeTrue()
+            ->and($teachers['Junior']['home_level'])->toBe('JHS')
+            ->and($teachers['Junior']['can_edit'])->toBeFalse();
+
+        $junior = DB::table('teachers')->where('first_name', 'Junior')->value('id');
+        $this->deleteJson("/api/teachers/{$junior}")
+            ->assertForbidden()
+            ->assertJsonPath('message', 'This teacher belongs to the other level (Junior High or Senior High). Only their own Chairperson or Master Teacher, or the Admin, can change this record.');
+    });
+
+    it('lets a Chairperson edit Junior High teachers but only view Senior High ones', function () {
+        $glc = User::factory()->create()->assignRole('glc');
+        $glc->gradeLevels()->sync([DB::table('grade_levels')->where('grade', 7)->value('id')]);
+        $teachers = collect($this->actingAs($glc)->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->keyBy('first_name');
+
+        expect($teachers['Junior']['can_edit'])->toBeTrue()
+            ->and($teachers['Senior']['can_edit'])->toBeFalse();
     });
 
     it('adds a department to the own level of the Master Teacher, and lets the same name live in each level', function () {

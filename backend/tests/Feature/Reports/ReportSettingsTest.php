@@ -82,9 +82,12 @@ describe('school profile', function () {
             ->assertJsonValidationErrors(['phone', 'email', 'facebook_url' => 'school\'s Facebook page']);
     });
 
-    it('prints the built-in school logo, with no upload', function () {
-        expect(app(\App\Services\ReportSettingsService::class)->logoDataUris('header'))->toHaveCount(1)
-            ->and(app(\App\Services\ReportSettingsService::class)->logoDataUris('header')[0])->toStartWith('data:image/png;base64,');
+    it('prints the DepEd seal at the top and the school logo at the bottom, with no upload (Nov 22, 2026)', function () {
+        $settings = app(\App\Services\ReportSettingsService::class);
+
+        expect($settings->logoDataUris('header'))->toBe([\App\Support\SchoolProfile::depedSealDataUri()])
+            ->and($settings->logoDataUris('footer'))->toBe([\App\Support\SchoolProfile::logoDataUri()])
+            ->and($settings->logoDataUris('header')[0])->toStartWith('data:image/png;base64,');
         $this->postJson('/api/school-profile/logos')->assertNotFound();
     });
 });

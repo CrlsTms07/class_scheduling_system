@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Models\DayPattern;
 use App\Models\TimeSlot;
 use App\Support\ScheduleFormat;
+use App\Support\ShiftHours;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
@@ -46,6 +47,17 @@ class SaveTimeSlotRequest extends FormRequest
     {
         return [
             fn (Validator $validator) => $this->validateNoOverlap($validator),
+            // Inside the hours of the shift (Junior High, Nov 22, 2026).
+            function (Validator $validator) {
+                $pattern = $this->route('dayPattern') ?? $this->route('timeSlot')?->dayPattern;
+                if ($validator->errors()->has('start_time') || $validator->errors()->has('end_time') || ! $pattern) {
+                    return;
+                }
+                $problem = ShiftHours::problem($pattern->level, $pattern->shift, (string) $this->input('start_time'), (string) $this->input('end_time'));
+                if ($problem !== null) {
+                    $validator->errors()->add(str_contains($problem, 'start at') ? 'start_time' : 'end_time', $problem);
+                }
+            },
             function (Validator $validator) {
                 if (! $this->boolean('is_async')) {
                     return;

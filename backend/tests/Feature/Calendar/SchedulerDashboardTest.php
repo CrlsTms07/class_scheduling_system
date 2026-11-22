@@ -148,9 +148,10 @@ it('gives the Admin the same steps, for every grade level', function () {
 it('lists the steps in the order of the Setup menu', function () {
     $steps = collect($this->actingAs(User::factory()->create()->assignRole('super_admin'))->getJson($this->url)->json('data.steps'));
 
-    expect($steps->pluck('key')->all())->toBe(['teachers', 'subjects', 'sections', 'rooms', 'loading', 'plot'])
-        ->and($steps[2]['counts'])->toHaveKeys(['sections', 'without_adviser'])
-        ->and($steps[3]['counts'])->toHaveKeys(['rooms', 'buildings']);
+    // Each step needs only the ones before it: a section needs its adviser and its room.
+    expect($steps->pluck('key')->all())->toBe(['teachers', 'subjects', 'rooms', 'sections', 'loading', 'plot'])
+        ->and($steps[2]['counts'])->toHaveKeys(['rooms', 'buildings'])
+        ->and($steps[3]['counts'])->toHaveKeys(['sections', 'without_adviser', 'without_room']);
 });
 
 it('needs a sign-in', function () {

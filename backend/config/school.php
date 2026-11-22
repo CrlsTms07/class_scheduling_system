@@ -28,7 +28,31 @@ return [
 
     // Every teacher carries at most this many subjects, the same for all (team decision, Nov 12, 2026).
     'max_subjects' => (int) env('SCHOOL_MAX_SUBJECTS', 5),
-    // Homeroom Guidance is limited to 60 minutes a week (CLAUDE.md). Subjects have no typed minutes
-    // any more (beneficiary review, Nov 21, 2026), so this is the only minutes rule left.
-    'homeroom_minutes' => 60,
+    // Homeroom Guidance is limited to these minutes a week, per department (team decision, Nov 22,
+    // 2026): 40 in Junior High, 60 in Senior High. Going over is a red flag.
+    'homeroom_minutes' => ['JHS' => 40, 'SHS' => 60],
+
+    // Senior High block schedule (team decision, Nov 22, 2026, from the Master Teacher's class
+    // program): 120-minute face-to-face blocks, a recess, a lunch and a 90-minute asynchronous
+    // session. "Use the Senior High blocks" on Class Hours and the ShsScheduleSeeder fill a bell
+    // schedule with these rows. Change them here, not in the code.
+    'shs_blocks' => [
+        ['label' => null, 'start_time' => '06:00', 'end_time' => '08:00', 'is_break' => false, 'is_async' => false],
+        ['label' => null, 'start_time' => '08:00', 'end_time' => '10:00', 'is_break' => false, 'is_async' => false],
+        ['label' => 'Recess', 'start_time' => '10:00', 'end_time' => '10:20', 'is_break' => true, 'is_async' => false],
+        ['label' => null, 'start_time' => '10:20', 'end_time' => '12:20', 'is_break' => false, 'is_async' => false],
+        ['label' => 'Lunch', 'start_time' => '12:20', 'end_time' => '13:20', 'is_break' => true, 'is_async' => false],
+        ['label' => 'Asynchronous session', 'start_time' => '13:20', 'end_time' => '14:50', 'is_break' => false, 'is_async' => true],
+    ],
+    // A teacher teaches at most 6 hours a day (RA 4670, Magna Carta for Public School Teachers).
+    // Going over is saved but flagged in amber (team decision, Nov 21, 2026).
+    'teacher_day_minutes' => 360,
+    // The hours each Junior High shift may use (team decision, Nov 22, 2026): the class hours and the
+    // times typed while plotting must stay inside them. "from" or "to" null means no limit.
+    'shift_hours' => [
+        'JHS' => [
+            'AM' => ['from' => null, 'to' => '12:30'],
+            'PM' => ['from' => '12:20', 'to' => '18:30'],
+        ],
+    ],
 ];

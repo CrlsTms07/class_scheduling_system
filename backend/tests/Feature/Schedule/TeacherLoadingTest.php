@@ -182,6 +182,26 @@ describe('assigning', function () {
             ->and(DB::table('audit_logs')->where('table_name', 'section_subjects')->where('action', 'create')->exists())->toBeTrue();
     });
 
+    it('counts an advisory as 1 load, so an adviser is full one subject sooner (Nov 22, 2026)', function () {
+        loadingRow($this, $this->otherSectionId);
+        DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 2]);
+        DB::table('sections')->where('id', $this->otherSectionId)->update(['adviser_id' => $this->anaId]);
+
+        $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $this->anaId])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['teacher_id' => 'already has 2 loads this term (1 subject and the advisory of']);
+
+        $termId = DB::table('section_subjects')->value('term_id');
+        $load = DB::table('teacher_load')->where('teacher_id', $this->anaId)->where('term_id', $termId)->first();
+        expect((int) $load->subject_count)->toBe(1)
+            ->and((int) $load->adviser_credit)->toBe(1)
+            ->and((int) $load->loads)->toBe(2)
+            ->and($load->is_overloaded)->toBeFalse();
+
+        DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 1]);
+        expect(DB::table('teacher_load')->where('teacher_id', $this->anaId)->value('is_overloaded'))->toBeTrue();
+    });
+
     it('does nothing when the teacher stays the same', function () {
         loadingRow($this);
 
@@ -196,7 +216,7 @@ describe('assigning', function () {
 
         $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $this->anaId])
             ->assertUnprocessable()
-            ->assertJsonValidationErrors(['teacher_id' => 'Full load: Ana Reyes already has 1 subjects this term']);
+            ->assertJsonValidationErrors(['teacher_id' => 'Full load: Ana Reyes already has 1 load this term (1 subject)']);
 
         DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 5]);
         $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $this->anaId])

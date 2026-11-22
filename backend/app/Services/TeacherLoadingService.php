@@ -158,6 +158,7 @@ class TeacherLoadingService
         // plus anyone already teaching a class in this term in their grade levels.
         $own = auth()->user()?->departmentsInScope();
         $departmentLevels = DB::table('departments')->pluck('level', 'id');
+        $advisories = $this->advisoriesIn($term);
         $departmentNames = DB::table('departments')->pluck('name', 'id');
         $teachingHere = $own === null ? collect() : DB::table('section_subjects')
             ->join('sections', 'sections.id', '=', 'section_subjects.section_id')
@@ -178,20 +179,26 @@ class TeacherLoadingService
                 && ! $teachingHere->has($teacher->id)])
             ->sortBy(fn (array $pair) => $pair[1] ? 1 : 0)
             ->values()
-            ->map(fn (array $pair) => [...$this->teacherChoice($pair[0], $loads, $departmentNames), 'from_level' => $pair[1] ? $departmentLevels[$pair[0]->department_id] : null])
+            ->map(fn (array $pair) => [...$this->teacherChoice($pair[0], $loads, $departmentNames, $advisories), 'from_level' => $pair[1] ? $departmentLevels[$pair[0]->department_id] : null])
             ->all();
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function teacherChoice(Teacher $teacher, $loads, $departmentNames): array
+    private function teacherChoice(Teacher $teacher, $loads, $departmentNames, array $advisories): array
     {
+        $subjects = (int) ($loads[$teacher->id] ?? 0);
+        $credit = isset($advisories[$teacher->id]) ? 1 : 0;
+
         return [
             'id' => $teacher->id,
             'name' => $teacher->printedName(),
             'shift' => $teacher->shift,
-            'assigned' => (int) ($loads[$teacher->id] ?? 0),
+            // Loads: subjects plus 1 for an advisory (team decision, Nov 22, 2026).
+            'assigned' => $subjects + $credit,
+            'subjects' => $subjects,
+            'advises' => $advisories[$teacher->id] ?? null,
             'limit' => $teacher->max_subjects,
             'department' => $departmentNames[$teacher->department_id] ?? null,
         ];
@@ -320,7 +327,7 @@ class TeacherLoadingService
                 ->get()
                 ->map(fn (SectionSubject $row) => "{$row->section_id}|{$row->subject_id}")
                 ->flip();
-            $loads = $this->loadsIn($term);
+            $loads = $this->effectiveLoadsIn($term);
 
             foreach ($sources as $source) {
                 $section = $sections[$source->section_id];
@@ -373,8 +380,38 @@ class TeacherLoadingService
     }
 
     /**
-     * A teacher carries at most max_subjects (5) subjects a term: the next one is refused with
-     * "Full load" (beneficiary review, Nov 21, 2026; it was only a flag before).
+     * The section each teacher advises in the term's school year (teacher id => "Grade 11 – A").
+     *
+     * @return array<int, string>
+     */
+    public function advisoriesIn(SchoolTerm $term): array
+    {
+        return Section::with('gradeLevel')
+            ->where('school_year_id', $term->school_year_id)
+            ->whereNotNull('adviser_id')
+            ->get()
+            ->mapWithKeys(fn (Section $section) => [$section->adviser_id => $section->label()])
+            ->all();
+    }
+
+    /**
+     * Each teacher's loads in the term: subjects, plus 1 for an advisory (team decision, Nov 22, 2026).
+     *
+     * @return array<int, int>
+     */
+    public function effectiveLoadsIn(SchoolTerm $term): array
+    {
+        $loads = $this->loadsIn($term);
+        foreach (array_keys($this->advisoriesIn($term)) as $teacherId) {
+            $loads[$teacherId] = ($loads[$teacherId] ?? 0) + 1;
+        }
+
+        return $loads;
+    }
+
+    /**
+     * A teacher carries at most max_subjects (5) loads a term, an advisory counting as 1: the next
+     * subject is refused with "Full load" (beneficiary review, Nov 21, 2026; adviser credit Nov 22).
      */
     private function stopIfFullLoad(SchoolTerm $term, int $teacherId): void
     {
@@ -383,11 +420,16 @@ class TeacherLoadingService
             return;
         }
 
-        $assigned = $this->loadsIn($term)[$teacherId] ?? 0;
+        $subjects = $this->loadsIn($term)[$teacherId] ?? 0;
+        $advises = $this->advisoriesIn($term)[$teacherId] ?? null;
+        $loads = $subjects + ($advises ? 1 : 0);
 
-        if ($assigned >= $teacher->max_subjects) {
+        if ($loads >= $teacher->max_subjects) {
+            $what = $advises
+                ? "{$subjects} ".($subjects === 1 ? 'subject' : 'subjects')." and the advisory of {$advises} (1 load)"
+                : "{$subjects} ".($subjects === 1 ? 'subject' : 'subjects');
             throw ValidationException::withMessages([
-                'teacher_id' => "Full load: {$teacher->printedName()} already has {$assigned} subjects this term, the most a teacher can carry. Choose another teacher.",
+                'teacher_id' => "Full load: {$teacher->printedName()} already has {$loads} ".($loads === 1 ? 'load' : 'loads')." this term ({$what}), the most a teacher can carry. Choose another teacher.",
             ]);
         }
     }
