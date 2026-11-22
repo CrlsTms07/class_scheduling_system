@@ -119,8 +119,9 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
   Git history, commit `51a4cca`) and the folder was renamed `frontend/`.
 - **Beneficiary review (team decisions, Nov 21, 2026, see `docs/client-notes.md` and
   `docs/paper/Update_Info for changes.pdf`):** no Excel import of any kind (schedules or master data; exports stay
-  PDF and CSV). One process in one order on the Setup menu and the Dashboard: 1 Teachers, 2 Subjects, 3 Sections,
-  4 Rooms & Buildings, 5 Teacher Loading, then Make the schedule (the Setup Guide page, the separate setup
+  PDF and CSV). One process in one order on the Setup menu, the Dashboard and each page: 1 Teachers, 2 Subjects &
+  Class Hours, 3 Rooms & Buildings, 4 Sections (adviser and room required), 5 Teacher Loading, then Make the
+  schedule (Rooms moved before Sections, Nov 21, 2026, so each step needs only the ones before it) (the Setup Guide page, the separate setup
   checklist and the "How to make a schedule" page were removed). Teachers: department required, `employee_id`,
   no typed "most hours a week" or "name on printed forms" (printed names come from the record), and a 6th subject
   is refused with "Full load". Class times are chosen while plotting: a typed start and end becomes a period of the
@@ -135,6 +136,19 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
   Senior High details for the Admin only; activities added in the class form; school details and logo built in
   (`App\Support\SchoolProfile`, `config/school.php`, `resources/images/ercihs-logo.png`); 4 fixed signatories
   (`PUT /terms/{term}/signatories/slots`); buildings "Used by".
+- **Clearer plotter (team decisions, Nov 21, 2026, evening, see `docs/client-notes.md`):** MATATAG weekly targets as a
+  guide for Junior High subjects (`config/curriculum.php`, `App\Support\Curriculum`, "3 of 5 days"); the subject
+  marked Next with "Place next" and going on by itself; minutes per day strip; amber flag for over 6 teaching
+  hours a day (`teacher_day_minutes`).
+- **Senior High blocks and loads (team decisions, Nov 22, 2026, see `docs/client-notes.md`):** SHS block schedule
+  (`config('school.shs_blocks')`: 6:00–8:00, 8:00–10:00 F2F, Recess, 10:20–12:20 F2F, Lunch, 1:20–2:50 asynchronous),
+  "Use the Senior High blocks" on Class Hours and `php artisan db:seed --class=ShsScheduleSeeder` (adds only what is
+  missing); each SHS subject needs 2 F2F blocks of 120 and 90 asynchronous minutes a week (`config/curriculum.php`
+  SHS and SHS_DEFAULT, amber `shs_blocks` flag); Homeroom at most 40 minutes (JHS) and 60 (SHS), taking only those minutes from the start of a longer period
+  (`ScheduleService::endIn`); an advisory counts
+  as 1 load (`teacher_load` view: `adviser_credit`, `loads`), so "Full load" and Overload count it. Teachers page:
+  everyone sees every teacher with a Junior High / Senior High badge; a Chairperson edits Junior High teachers,
+  the Master Teacher Senior High ones, the Admin all (`TeacherService::viewOnlyFor`).
 - **Back-end:** migrations, seeders, auth, plotter, approvals and JHS Class Program PDF are done.
 - **Deployment:** Render (one Docker service for Laravel and the web app) with a Supabase database (Neon as a
   fallback). Steps, including
@@ -201,8 +215,8 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
 - **Quick-add teacher:** in the plotter's teacher dropdown, typing a name that does not
   exist offers "+ Add new teacher". This creates a minimal teacher record (name only, to
   be completed later). Never store teacher names as free text on schedule entries.
-- Profile includes department and designation (both required), **shift (AM/PM/WHOLE_DAY)**, max subjects
-  (5) and teaching-related tasks (ICT/SSG Coordinator, Lab Manager) per term. Teaching personnel only, and no
+- Profile includes department and designation (both required), **shift (AM/PM/WHOLE_DAY)**, max loads
+  (5; each subject of a section is 1 load and an advisory is 1 more, Nov 22, 2026) and teaching-related tasks (ICT/SSG Coordinator, Lab Manager) per term. Teaching personnel only, and no
   educational qualifications (team decisions, Nov 21, 2026).
 
 ### Sections
@@ -245,12 +259,15 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
 **Soft rules: entry is saved but flagged** (red or amber badge in the plotter, and listed
 in the Conflict and Validation Report). Submitting is blocked until fixed or
 acknowledged:
-- **Homeroom Guidance is over 60 minutes** a week (`config('school.homeroom_minutes')`, from the
-  `subject_minutes_check` view). Other subjects have no typed minutes since Nov 21, 2026 (beneficiary
-  review): their minutes are counted from the schedule and are not a flag.
+- **Homeroom Guidance is over its limit**: 40 minutes a week in Junior High, 60 in Senior High
+  (`config('school.homeroom_minutes')`, `Curriculum::homeroomMinutes()`, from the `subject_minutes_check` view).
+- **A Senior High subject lacks or exceeds its blocks** (Nov 22, 2026): 2 F2F blocks of 120 minutes and 90
+  asynchronous minutes a week by default (`config/curriculum.php`); amber, to fix or acknowledge. Junior High
+  subjects have no typed minutes (their MATATAG targets are a guide only).
 - The entry is outside the section's or teacher's shift, or overlaps a break.
-- The teacher is over `max_subjects` (`teacher_load` view). Since Nov 21, 2026 a 6th subject is refused in
-  Teacher Loading ("Full load"), so this flag only shows for older data.
+- The teacher is over `max_subjects` loads (`teacher_load` view; an advisory counts as 1 load, Nov 22, 2026). A
+  subject past the limit is refused in Teacher Loading ("Full load"), so this flag shows when an advisory is
+  given to a teacher who is already full, or for older data.
 - The section has no adviser, or an open slot is still unfilled.
 
 ## Copy schedule to the next term
@@ -413,7 +430,7 @@ tablets and desktops. Test at 360×640, 390×844, 844×390 (landscape), 768×102
 3. **Test what you build.**
    - Pest tests for back-end logic. Conflict tests must cover: overlap, back-to-back,
      different day, different term, rejected entry ignored, open slot, and Homeroom
-     over 60 minutes flagged.
+     over its limit flagged (40 JHS, 60 SHS).
    - Run the tests and the build before saying a task is done.
 4. **Ask, don't guess.** Check the "Open questions" in `docs/client-notes.md`. Do not
    decide those yourself.

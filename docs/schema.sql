@@ -443,14 +443,24 @@ CREATE TABLE trusted_devices (
 -- Helper views
 -- ---------------------------------------------------------------------
 -- Teaching load per teacher per term (4–5 subject limit)
+-- An advisory counts as 1 load (Nov 22, 2026): loads = subjects + 1 when the teacher advises a
+-- section of the term's school year; overloaded past max_subjects (5).
 CREATE VIEW teacher_load AS
 SELECT t.id AS teacher_id, ss.term_id,
-       COUNT(ss.id)                  AS subject_count,
+       COUNT(ss.id)                                  AS subject_count,
        t.max_subjects,
-       COUNT(ss.id) > t.max_subjects AS is_overloaded
+       COUNT(ss.id) + adv.credit > t.max_subjects    AS is_overloaded,
+       adv.credit                                    AS adviser_credit,
+       COUNT(ss.id) + adv.credit                     AS loads
 FROM teachers t
 JOIN section_subjects ss ON ss.teacher_id = t.id
-GROUP BY t.id, ss.term_id, t.max_subjects;
+JOIN school_terms st ON st.id = ss.term_id
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM sections s WHERE s.adviser_id = t.id AND s.school_year_id = st.school_year_id
+    ) THEN 1 ELSE 0 END AS credit
+) adv
+GROUP BY t.id, ss.term_id, t.max_subjects, adv.credit;
 
 -- Scheduled minutes vs required minutes per section subject
 -- (flags e.g. Homeroom Guidance scheduled for more than 60 minutes)
