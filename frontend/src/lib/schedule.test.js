@@ -2,16 +2,20 @@
 import { describe, expect, it } from "vitest";
 import { classEnd, classMinutes, dayTotals, defaultDays, entryAt, fittingPeriods, hasSubject, isComplete, minutesText, nextSubject, planMove, progressPercent, progressText, subjectColor } from "./schedule.js";
 
-const slot = (id, start, end, minutes, isBreak = false) => ({ id, period_no: null, label: isBreak ? "Recess" : null, start_time: start, end_time: end, minutes, is_break: isBreak });
+/** @typedef {import("./schedule.js").Loading} Loading */
+
+/** A period (or a break) of a bell schedule. */
+const slot = (/** @type {number} */ id, /** @type {string} */ start, /** @type {string} */ end, /** @type {number} */ minutes, isBreak = false) => ({ id, period_no: null, label: isBreak ? "Recess" : null, start_time: start, end_time: end, minutes, is_break: isBreak });
 const P1 = slot(1, "07:00", "07:45", 45);
 const P2 = slot(2, "07:45", "09:05", 80);
 const BREAK = slot(3, "09:05", "09:25", 20, true);
 const P4 = slot(4, "09:25", "10:10", 45);
 const PATTERN = { id: 10, name: "Monday – Thursday", days: [1, 2, 3, 4], slots: [P1, P2, BREAK, P4] };
 
-const loading = (scheduled, required = 220) => ({ id: 50, subject_id: 5, teacher_id: 7, subject: "Math", is_priority: false, required_minutes: required, scheduled_minutes: scheduled, teacher: "Ana" });
-const free = (slotId, days, busy = []) => ({ slot_id: slotId, minutes: 0, free_days: days, busy });
-const entry = (day, start, sectionSubjectId = 50, activityId = null) => ({ id: day * 100, day, start_time: start, end_time: "x", status: /** @type {const} */ ("draft"), section_subject_id: sectionSubjectId, activity_id: activityId, subject: "Math", teacher: "Ana", room_id: 1, room: "101" });
+/** A subject of the section; required: its minutes limit, null for none. @returns {Loading} */
+const loading = (/** @type {number} */ scheduled, /** @type {number | null} */ required = 220) => ({ id: 50, subject_id: 5, teacher_id: 7, subject: "Math", is_priority: false, required_minutes: required, scheduled_minutes: scheduled, teacher: "Ana" });
+const free = (/** @type {number} */ slotId, /** @type {number[]} */ days, /** @type {{ day: number, reason: string }[]} */ busy = []) => ({ slot_id: slotId, minutes: 0, free_days: days, busy });
+const entry = (/** @type {number} */ day, /** @type {string} */ start, /** @type {number | null} */ sectionSubjectId = 50, /** @type {number | null} */ activityId = null) => ({ id: day * 100, day, start_time: start, end_time: "x", status: /** @type {const} */ ("draft"), section_subject_id: sectionSubjectId, activity_id: activityId, subject: "Math", teacher: "Ana", room_id: 1, room: "101" });
 
 describe("which periods a class may go to (UI requirement 6)", () => {
   it("offers only free periods, never breaks", () => {
@@ -53,7 +57,7 @@ describe("which periods a class may go to (UI requirement 6)", () => {
 });
 
 describe("default days of a new class", () => {
-  const plotter = (level, entries = []) => /** @type {any} */ ({ section: { level }, entries });
+  const plotter = (/** @type {"JHS" | "SHS"} */ level, /** @type {any[]} */ entries = []) => /** @type {any} */ ({ section: { level }, entries });
 
   it("takes every free day of the bell schedule in Junior High", () => {
     expect(defaultDays(plotter("JHS"), PATTERN, P1, 2, [1, 2, 3, 4])).toEqual([1, 2, 3, 4]);
@@ -105,7 +109,7 @@ describe("words and colors", () => {
 });
 
 describe("the MATATAG targets in the plotter (Nov 21, 2026)", () => {
-  const withTarget = (days, minutes, sessions = 5) => ({ ...loading(minutes, null), target: { sessions, minutes: sessions === 5 ? 225 : 60 }, days_placed: days });
+  const withTarget = (/** @type {number} */ days, /** @type {number} */ minutes, sessions = 5) => ({ ...loading(minutes, null), target: { sessions, minutes: sessions === 5 ? 225 : 60 }, days_placed: days });
 
   it("counts a subject complete on all its days, even with a shorter Friday", () => {
     expect(isComplete(withTarget(4, 180))).toBe(false);
@@ -138,7 +142,7 @@ describe("the MATATAG targets in the plotter (Nov 21, 2026)", () => {
       ] },
       { id: 2, name: "Friday", days: [5], slots: [{ id: 4, period_no: 1, label: null, start_time: "07:00", end_time: "07:40", minutes: 40, is_break: false }] },
     ];
-    const entries = [{ id: 1, day: 1, start_time: "07:00", end_time: "07:45", status: "draft", section_subject_id: 50, activity_id: null, subject: "Math", teacher: "Ana", room_id: 1, room: "101" }];
+    const entries = [{ id: 1, day: 1, start_time: "07:00", end_time: "07:45", status: /** @type {const} */ ("draft"), section_subject_id: 50, activity_id: null, subject: "Math", teacher: "Ana", room_id: 1, room: "101" }];
     const totals = dayTotals({ patterns, entries });
     expect(totals[0]).toEqual({ day: 1, pattern: "Monday – Thursday", planned: 90, placed: 45 });
     expect(totals[4]).toEqual({ day: 5, pattern: "Friday", planned: 40, placed: 0 });
@@ -146,7 +150,7 @@ describe("the MATATAG targets in the plotter (Nov 21, 2026)", () => {
 });
 
 describe("the Senior High blocks in the plotter (Nov 22, 2026)", () => {
-  const shs = (days, asyncMinutes) => ({ ...loading(days * 120 + asyncMinutes, null), target: { sessions: 2, minutes: 240, async_minutes: 90 }, days_placed: days, scheduled_async_minutes: asyncMinutes });
+  const shs = (/** @type {number} */ days, /** @type {number} */ asyncMinutes) => ({ ...loading(days * 120 + asyncMinutes, null), target: { sessions: 2, minutes: 240, async_minutes: 90 }, days_placed: days, scheduled_async_minutes: asyncMinutes });
 
   it("counts face-to-face blocks and the asynchronous session apart, and says what is missing", () => {
     expect(progressText(shs(1, 0))).toBe("1 of 2 F2F blocks · 0 of 90 async mins · 1 more F2F block and the async session");
@@ -169,7 +173,7 @@ describe("the Senior High blocks in the plotter (Nov 22, 2026)", () => {
 
 describe("Homeroom in a longer period (Nov 22, 2026)", () => {
   const block = { id: 9, period_no: 1, label: null, start_time: "06:00", end_time: "08:00", minutes: 120, is_break: false };
-  const homeroom = (scheduled) => ({ ...loading(scheduled, 60), subject: "Homeroom Guidance" });
+  const homeroom = (/** @type {number} */ scheduled) => ({ ...loading(scheduled, 60), subject: "Homeroom Guidance" });
 
   it("takes only its 60 minutes from the start of a 120-minute block", () => {
     expect(classMinutes(homeroom(0), block)).toBe(60);

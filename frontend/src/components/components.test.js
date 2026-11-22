@@ -8,6 +8,7 @@ import { openListEditor } from "./list-editor.js";
 import { noMatches } from "./page-header.js";
 import { openFormDialog } from "./form-dialog.js";
 import { ApiError } from "@/api/client.js";
+import { button, byText, find, findInput, key, lastDialog, settle, textOf, type } from "@/test-helpers.js";
 
 // jsdom has no <dialog> methods; these stand in for the browser's.
 HTMLDialogElement.prototype.showModal = function showModal() {
@@ -18,12 +19,6 @@ HTMLDialogElement.prototype.close = function close() {
   this.dispatchEvent(new Event("close"));
 };
 
-const type = (input, text) => {
-  input.value = text;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-};
-const key = (element, name) => element.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
-
 describe("searchable select (UI requirement 3)", () => {
   const options = [
     { value: 1, label: "Ana Reyes", hint: "Math" },
@@ -31,14 +26,19 @@ describe("searchable select (UI requirement 3)", () => {
     { value: 3, label: "Carla Lim", hint: "English" },
   ];
 
-  it("filters as the user types, and says when nothing matches", () => {
-    const select = searchableSelect({ label: "Teacher", options });
+  /** A select on the page, opened, with its search box. */
+  const openSelect = (/** @type {Parameters<typeof searchableSelect>[0]} */ props) => {
+    const select = searchableSelect(props);
     document.body.append(select);
-    select.querySelector("button").click();
-    const search = select.querySelector("input");
+    find("button", select).click();
+    return { select, search: findInput(select) };
+  };
+
+  it("filters as the user types, and says when nothing matches", () => {
+    const { select, search } = openSelect({ label: "Teacher", options });
 
     type(search, "ben");
-    expect([...select.querySelectorAll("[role=option]")].map((item) => item.textContent)).toEqual(["Ben CruzScience"]);
+    expect([...select.querySelectorAll("[role=option]")].map(textOf)).toEqual(["Ben CruzScience"]);
 
     type(search, "science");
     expect(select.querySelectorAll("[role=option]")).toHaveLength(1);
@@ -49,28 +49,23 @@ describe("searchable select (UI requirement 3)", () => {
 
   it("chooses with the keyboard", () => {
     const onChange = vi.fn();
-    const select = searchableSelect({ label: "Teacher", options, onChange });
-    document.body.append(select);
-    select.querySelector("button").click();
-    const search = select.querySelector("input");
+    const { select, search } = openSelect({ label: "Teacher", options, onChange });
 
     key(search, "ArrowDown");
     key(search, "Enter");
 
     expect(onChange).toHaveBeenCalledWith(2, options[1]);
     expect(select.getValue()).toBe(2);
-    expect(select.querySelector("button").textContent).toContain("Ben Cruz");
+    expect(find("button", select).textContent).toContain("Ben Cruz");
   });
 
   it("offers to add what was typed, for a new teacher", async () => {
     const run = vi.fn();
-    const select = searchableSelect({ label: "Teacher", options, create: { label: (typed) => `Add new teacher "${typed}"`, run } });
-    document.body.append(select);
-    select.querySelector("button").click();
-    type(select.querySelector("input"), "Dina Santos");
+    const { select, search } = openSelect({ label: "Teacher", options, create: { label: (typed) => `Add new teacher "${typed}"`, run } });
+    type(search, "Dina Santos");
 
-    const add = [...select.querySelectorAll("[role=option]")].find((item) => item.textContent.includes("Add new teacher"));
-    expect(add?.textContent).toContain('Add new teacher "Dina Santos"');
+    const add = byText("[role=option]", "Add new teacher", select, { partial: true });
+    expect(add.textContent).toContain('Add new teacher "Dina Santos"');
     add.click();
     await Promise.resolve();
     expect(run).toHaveBeenCalledWith("Dina Santos");
@@ -79,18 +74,23 @@ describe("searchable select (UI requirement 3)", () => {
   it("is labelled for screen readers", () => {
     const select = searchableSelect({ label: "Room", options });
     document.body.append(select);
-    const label = select.querySelector("label");
+    const label = /** @type {HTMLLabelElement} */ (find("label", select));
     expect(label.textContent).toBe("Room");
-    expect(document.getElementById(label.htmlFor)).toBe(select.querySelector("button"));
+    expect(document.getElementById(label.htmlFor)).toBe(find("button", select));
   });
 });
 
 describe("12-hour time picker (UI requirement 5): chosen, never typed", () => {
-  /** Opens one of the picker's lists and picks an option. */
+  /**
+   * Opens one of the picker's lists and picks an option.
+   * @param {HTMLElement} picker
+   * @param {string} label  "Hour" or "Minutes"
+   * @param {string} option
+   */
   const pick = (picker, label, option) => {
-    const field = [...picker.querySelectorAll("label")].find((item) => item.textContent === label).parentElement;
-    field.querySelector("button").click();
-    [...field.querySelectorAll("[role=option]")].find((item) => item.textContent.trim() === option).click();
+    const field = /** @type {HTMLElement} */ (byText("label", label, picker).parentElement);
+    find("button", field).click();
+    byText("[role=option]", option, field).click();
   };
 
   it("gives 24-hour time to the API from the chosen hour, minutes and PM", () => {
@@ -99,7 +99,7 @@ describe("12-hour time picker (UI requirement 5): chosen, never typed", () => {
     document.body.append(picker);
     pick(picker, "Hour", "1");
     pick(picker, "Minutes", "30");
-    [...picker.querySelectorAll("button")].find((button) => button.textContent === "PM").click();
+    button("PM", picker).click();
 
     expect(picker.getValue()).toBe("13:30");
     expect(onChange).toHaveBeenLastCalledWith("13:30");
@@ -110,7 +110,7 @@ describe("12-hour time picker (UI requirement 5): chosen, never typed", () => {
     const picker = timePicker({ label: "End time", value: "14:07" });
     expect(picker.textContent).toContain("2");
     expect(picker.textContent).toContain("07");
-    expect([...picker.querySelectorAll("button")].find((button) => button.textContent === "PM").getAttribute("aria-pressed")).toBe("true");
+    expect(button("PM", picker).getAttribute("aria-pressed")).toBe("true");
     expect(picker.getValue()).toBe("14:07");
   });
 
@@ -131,24 +131,24 @@ describe("centered dialog (UI requirement 2) and confirmations", () => {
     const { element } = openDialog({ title: "Add class", body: "Fields", onClose });
 
     expect(element.open).toBe(true);
-    expect(element.querySelector("h2").textContent).toBe("Add class");
-    [...element.querySelectorAll("button")].find((button) => button.textContent.includes("Close")).click();
+    expect(find("h2", element).textContent).toBe("Add class");
+    button("Close", element, { partial: true }).click();
     expect(onClose).toHaveBeenCalled();
     expect(document.body.contains(element)).toBe(false);
   });
 
   it("asks before something that cannot be undone", async () => {
     const answer = confirmAction({ title: "Clear this schedule?", message: "This removes all 12 classes.", confirmLabel: "Yes, clear it" });
-    const dialog = document.querySelector("dialog");
+    const dialog = lastDialog();
     expect(dialog.textContent).toContain("This removes all 12 classes.");
-    [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Yes, clear it").click();
+    button("Yes, clear it", dialog).click();
 
     await expect(answer).resolves.toBe(true);
   });
 
   it("resolves false on Cancel", async () => {
     const answer = confirmAction({ title: "Remove?", message: "Gone.", confirmLabel: "Remove" });
-    [...document.querySelector("dialog").querySelectorAll("button")].find((button) => button.textContent === "Cancel").click();
+    button("Cancel", lastDialog()).click();
     await expect(answer).resolves.toBe(false);
   });
 });
@@ -158,50 +158,47 @@ describe("pop-up notifications (UI requirement 4)", () => {
     toast.success("Math 7 was added.");
     toast.error(new ApiError(422, "Ana Reyes is teaching Grade 7 – Hope on Monday at 7:00 AM."));
 
-    const area = document.getElementById("toasts");
-    expect(area.querySelector("[role=status]").textContent).toContain("Math 7 was added.");
-    expect(area.querySelector("[role=alert]").textContent).toContain("Ana Reyes is teaching");
+    const area = find("#toasts");
+    expect(find("[role=status]", area).textContent).toContain("Math 7 was added.");
+    expect(find("[role=alert]", area).textContent).toContain("Ana Reyes is teaching");
     // Each says plainly how it went; the newest is on top.
-    expect(area.firstElementChild.textContent).toContain("Failed");
-    expect(area.querySelector("[role=status]").textContent).toContain("Success");
+    expect(area.firstElementChild?.textContent).toContain("Failed");
+    expect(find("[role=status]", area).textContent).toContain("Success");
   });
 
   it("keeps a message shown inside a dialog on screen when the dialog closes", () => {
     const { element, close } = openDialog({ title: "Add class", body: "Fields" });
     // In a browser, a message shown while a dialog is open goes inside it (outside is inert).
-    element.append(document.getElementById("toasts"));
+    element.append(find("#toasts"));
     toast.success("Values Education was added.");
     close();
 
-    const area = document.getElementById("toasts");
-    expect(area?.parentElement).toBe(document.body);
-    expect(area?.textContent).toContain("Values Education was added.");
+    const area = find("#toasts");
+    expect(area.parentElement).toBe(document.body);
+    expect(area.textContent).toContain("Values Education was added.");
   });
 });
 
 describe("list editor (tracks, departments, designations, tasks)", () => {
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-
   it("lists the names, adds one and deletes one after confirming", async () => {
     let items = [{ id: 1, name: "Academic" }];
-    const add = vi.fn(async (name) => { items = [...items, { id: 2, name }]; });
-    const remove = vi.fn(async (item) => { items = items.filter((other) => other.id !== item.id); });
+    const add = vi.fn(async (/** @type {string} */ name) => { items = [...items, { id: 2, name }]; });
+    const remove = vi.fn(async (/** @type {{ id: number }} */ item) => { items = items.filter((other) => other.id !== item.id); });
     openListEditor({ title: "Tracks", load: async () => [{ label: "Tracks", noun: "track", items, add, remove }] });
     await settle();
-    const dialog = document.querySelector("dialog");
+    const dialog = lastDialog();
     expect(dialog.textContent).toContain("Academic");
 
-    dialog.querySelector("input").value = "TechPro";
-    dialog.querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+    findInput(dialog).value = "TechPro";
+    find("form", dialog).dispatchEvent(new Event("submit", { cancelable: true }));
     await settle();
     await settle();
     expect(add).toHaveBeenCalledWith("TechPro");
     expect(dialog.textContent).toContain("TechPro");
 
-    dialog.querySelector('[aria-label="Delete Academic"]').click();
+    find('[aria-label="Delete Academic"]', dialog).click();
     await settle();
-    const confirm = [...document.querySelectorAll("dialog")].at(-1);
-    [...confirm.querySelectorAll("button")].find((button) => button.textContent === "Delete").click();
+    button("Delete", lastDialog()).click();
     await settle();
     await settle();
     expect(remove).toHaveBeenCalledWith({ id: 1, name: "Academic" });
@@ -211,25 +208,21 @@ describe("list editor (tracks, departments, designations, tasks)", () => {
   it("hides Delete when the user may not delete, and says who can", async () => {
     openListEditor({ title: "Tracks", load: async () => [{ label: "Tracks", noun: "track", items: [{ id: 1, name: "Academic" }], add: async () => {}, note: "Only the Admin can delete a track." }] });
     await settle();
-    const dialog = [...document.querySelectorAll("dialog")].at(-1);
+    const dialog = lastDialog();
     expect(dialog.querySelector('[aria-label="Delete Academic"]')).toBeNull();
     expect(dialog.textContent).toContain("Only the Admin can delete a track.");
   });
 });
 
 describe("list editor checks names while typing", () => {
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-
   it("refuses letters typed at random, says why, and does not call the server", async () => {
     const add = vi.fn(async () => {});
     openListEditor({ title: "Lists", load: async () => [{ label: "Departments", noun: "department", items: [], add }] });
     await settle();
-    const dialog = [...document.querySelectorAll("dialog")].at(-1);
-    const input = dialog.querySelector("input");
-    input.value = "vffxfszv";
-    input.dispatchEvent(new Event("input"));
-    expect(dialog.querySelector("[role=alert]").textContent).toContain("no vowel");
-    dialog.querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+    const dialog = lastDialog();
+    type(findInput(dialog), "vffxfszv");
+    expect(find("[role=alert]", dialog).textContent).toContain("no vowel");
+    find("form", dialog).dispatchEvent(new Event("submit", { cancelable: true }));
     await settle();
     expect(add).not.toHaveBeenCalled();
   });
@@ -237,9 +230,9 @@ describe("list editor checks names while typing", () => {
   it("does not close on Done while a typed name was not added", async () => {
     openListEditor({ title: "Lists", load: async () => [{ label: "Departments", noun: "department", items: [], add: async () => {} }] });
     await settle();
-    const dialog = [...document.querySelectorAll("dialog")].at(-1);
-    dialog.querySelector("input").value = "Science";
-    [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Done").click();
+    const dialog = lastDialog();
+    findInput(dialog).value = "Science";
+    button("Done", dialog).click();
     expect(dialog.open).toBe(true);
     expect(dialog.textContent).toContain('"Science" was not added yet');
   });
@@ -251,7 +244,7 @@ describe("a filtered list with nothing in it says why", () => {
     const box = noMatches({ noun: "teacher", search: "dito", filters: ["Senior High", null, "Inactive"], onClear });
     expect(box.textContent).toContain('No teacher matches the search "dito" with the filters Senior High, Inactive.');
     expect(box.textContent).toContain("only looks inside the filters");
-    [...box.querySelectorAll("button")].find((button) => button.textContent.includes("Clear")).click();
+    button("Clear", box, { partial: true }).click();
     expect(onClear).toHaveBeenCalled();
   });
 });
@@ -265,15 +258,13 @@ describe("forms check each field while it is filled in", () => {
       submitLabel: "Add room",
       onSubmit,
     });
-    const dialog = [...document.querySelectorAll("dialog")].at(-1);
-    const input = dialog.querySelector("input");
-    input.value = "80";
-    input.dispatchEvent(new Event("input"));
+    const dialog = lastDialog();
+    const input = findInput(dialog);
+    type(input, "80");
     expect(dialog.textContent).toContain("A room holds at most 60 seats.");
     expect(onSubmit).not.toHaveBeenCalled();
 
-    input.value = "40";
-    input.dispatchEvent(new Event("input"));
+    type(input, "40");
     expect(dialog.textContent).not.toContain("A room holds at most 60 seats.");
   });
 
@@ -288,11 +279,11 @@ describe("forms check each field while it is filled in", () => {
       submitLabel: "Add section",
       onSubmit,
     });
-    const dialog = [...document.querySelectorAll("dialog")].at(-1);
-    const [level, strand] = dialog.querySelectorAll("input");
-    expect(dialog.querySelector(`label[for="${strand.id}"]`).textContent).toBe("Strand");
+    const dialog = lastDialog();
+    const [level, strand] = /** @type {HTMLInputElement[]} */ ([...dialog.querySelectorAll("input")]);
+    expect(find(`label[for="${strand.id}"]`, dialog).textContent).toBe("Strand");
     type(level, "SHS");
-    [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Add section").click();
+    button("Add section", dialog).click();
     await Promise.resolve();
     expect(dialog.textContent).toContain("Strand is required");
     expect(onSubmit).not.toHaveBeenCalled();
@@ -301,4 +292,3 @@ describe("forms check each field while it is filled in", () => {
     expect(dialog.textContent).not.toContain("Strand is required");
   });
 });
-

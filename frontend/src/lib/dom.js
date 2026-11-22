@@ -5,7 +5,7 @@
  */
 
 /**
- * @typedef {string | number | Node | null | undefined | false | Child[]} Child
+ * @typedef {string | number | Node | null | undefined | false | any[]} Child (a list may hold more children)
  * @typedef {Record<string, any>} Props
  */
 

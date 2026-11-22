@@ -9,37 +9,33 @@
  * The time is chosen here, while making the schedule (beneficiary review, Nov 21, 2026): pick a
  * period, or type the start and end. A typed time becomes a period of the section's bell schedule
  * (a day with none gets one), so no time slots have to be set up first.
+ *
+ * Its parts live next to it: add-subject.js, activity-fields.js, period-choices.js,
+ * conflict-box.js and toggles.js.
  */
-import { assignTeacher, getSectionLoading, teacherHint } from "@/api/teacher-loading.js";
-import { openFormDialog } from "@/components/form-dialog.js";
+import { teacherHint } from "@/api/teacher-loading.js";
 import { h, replace } from "@/lib/dom.js";
 import { openDialog, confirmAction, setBusy } from "@/components/dialog.js";
 import { searchableSelect } from "@/components/searchable-select.js";
 import { timePicker } from "@/components/time-picker.js";
 import { toast } from "@/components/toast.js";
 import { icon } from "@/components/icons.js";
-import { api, errorMessage } from "@/api/client.js";
-import { termState } from "@/state/term.js";
-import {
-  assignSlot,
-  changeTeacher,
-  clearSlot,
-  conflictDetailsOf,
-  getFreePeriods,
-  getPlotter,
-  getTeacherChoices,
-  placeActivity,
-  quickAddTeacher,
-  resolvePeriod,
-} from "@/api/schedule.js";
-import { DAY_NAMES, classEnd, classMinutes, defaultDays, entryAt, fittingPeriods, hasSubject, isActivity, isLocked, minutesLeft, nextSubject, progressText, slotTimeLabel } from "@/lib/schedule.js";
+import { errorMessage } from "@/api/client.js";
+import { assignSlot, changeTeacher, clearSlot, conflictDetailsOf, getFreePeriods, getPlotter, getTeacherChoices, quickAddTeacher, resolvePeriod } from "@/api/schedule.js";
+import { DAY_NAMES, classMinutes, defaultDays, entryAt, fittingPeriods, hasSubject, isActivity, isLocked, minutesLeft, nextSubject, progressText, slotTimeLabel } from "@/lib/schedule.js";
 import { shiftHoursProblem } from "@/lib/shifts.js";
 import { minutesBetween } from "@/lib/time.js";
+import { activityFields } from "./activity-fields.js";
+import { openAddSubject } from "./add-subject.js";
+import { conflictBox } from "./conflict-box.js";
+import { periodBlocks, periodButton } from "./period-choices.js";
+import { dayToggles, toggleButton } from "./toggles.js";
 
 /**
  * @typedef {import("@/lib/schedule.js").Plotter} Plotter
  * @typedef {import("@/lib/schedule.js").TimeSlot} TimeSlot
- * @typedef {import("@/lib/schedule.js").DayPattern} DayPattern
+ * @typedef {import("@/lib/schedule.js").Loading} Loading
+ * @typedef {import("./period-choices.js").Fit} Fit
  *
  * @typedef {object} ClassTarget
  * @property {number} day  the day that was tapped
@@ -48,8 +44,7 @@ import { minutesBetween } from "@/lib/time.js";
  * @property {unknown} [error]  a conflict from a quick placement, to explain at once
  */
 
-const TOGGLE_ON = "border-brand bg-brand text-white";
-const TOGGLE_OFF = "bg-surface text-foreground hover:bg-surface-muted";
+const NOTE = "rounded-lg bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100";
 
 /**
  * Opens the dialog for a period (or a day, to type a time).
@@ -61,7 +56,6 @@ export function openClassDialog({ plotter, termId, target }) {
   const current = tappedSlot ? entryAt(plotter.entries, target.day, tappedSlot) : undefined;
   const isEditing = hasSubject(current);
   const isCurrentLocked = current ? isLocked(current) : false;
-  const dayName = DAY_NAMES[target.day];
 
   /** @type {{ kind: "subject" | "activity", loadingId: number | null, teacherId: number | null, roomId: number | null, slotId: number | null, days: number[], typing: boolean, free: import("@/lib/schedule.js").FreePeriod[] | null }} */
   const state = {
@@ -78,9 +72,9 @@ export function openClassDialog({ plotter, termId, target }) {
   };
 
   const loading = () => plotter.loading.find(({ id }) => id === state.loadingId);
+  const chosenTeacherId = () => state.teacherId ?? loading()?.teacher_id ?? null;
   /** A chosen period of an asynchronous session (Senior High) takes no room (Nov 21, 2026). */
   const isAsyncChosen = () => !state.typing && state.slotId !== null && plotter.patterns.some(({ slots }) => slots.some((slot) => slot.id === state.slotId && slot.is_async));
-  const chosenTeacherId = () => state.teacherId ?? loading()?.teacher_id ?? null;
 
   const errorBox = h("div", { role: "alert", "aria-live": "assertive" });
   const kindArea = h("div");
@@ -90,14 +84,11 @@ export function openClassDialog({ plotter, termId, target }) {
   const saveButton = /** @type {HTMLButtonElement} */ (h("button", { type: "button", class: "btn btn-primary", onclick: () => save() }, isEditing ? "Save changes" : "Add class"));
   const removeButton = /** @type {HTMLButtonElement} */ (h("button", { type: "button", class: "btn btn-outline text-danger", onclick: () => remove() }, icon("trash"), "Remove from selected days"));
 
-  const title = isEditing ? `Edit class · ${dayName}` : tappedSlot ? `Add class · ${dayName}` : `Add class · ${dayName}`;
-  const description = tappedSlot ? `${plotter.section.label} · ${slotTimeLabel(tappedSlot)} · ${tappedSlot.minutes} mins` : `${plotter.section.label}. Choose a period, or type the start and end time.`;
-
   /** @type {ReturnType<typeof setInterval> | undefined} */
   let recheck;
   const { close } = openDialog({
-    title,
-    description,
+    title: `${isEditing ? "Edit" : "Add"} class · ${DAY_NAMES[target.day]}`,
+    description: tappedSlot ? `${plotter.section.label} · ${slotTimeLabel(tappedSlot)} · ${tappedSlot.minutes} mins` : `${plotter.section.label}. Choose a period, or type the start and end time.`,
     onClose: () => {
       clearInterval(recheck);
       window.removeEventListener("focus", onFocus);
@@ -110,6 +101,31 @@ export function openClassDialog({ plotter, termId, target }) {
     ],
   });
 
+  /* ---------- Messages ---------- */
+
+  const showError = (/** @type {string} */ message) => {
+    replace(errorBox, h("p", { class: "rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger" }, message));
+  };
+
+  /** Explains a conflict in plain words, with buttons for the free rooms and teachers. */
+  const showConflict = (/** @type {unknown} */ error) => {
+    const details = conflictDetailsOf(error);
+    if (!details) {
+      showError(errorMessage(error));
+      return;
+    }
+    const pick = (/** @type {() => void} */ change) => {
+      change();
+      errorBox.replaceChildren();
+      drawFields();
+    };
+    replace(errorBox, conflictBox(details, {
+      subjectName: loading()?.subject ?? null,
+      onTeacher: (teacherId) => pick(() => { state.teacherId = teacherId; }),
+      onRoom: (roomId) => pick(() => { state.roomId = roomId; }),
+    }));
+  };
+
   /* ---------- What goes here: a subject or an activity ---------- */
 
   const drawKind = () => {
@@ -117,147 +133,125 @@ export function openClassDialog({ plotter, termId, target }) {
       replace(kindArea, h("p", { class: "rounded-lg bg-surface-muted p-3 text-sm" }, `This class is ${current?.status} and cannot be changed.`));
       return;
     }
+    const kinds = /** @type {const} */ ([["subject", "Subject"], ["activity", "Activity"]]);
     replace(
       kindArea,
       h(
         "div",
         { role: "group", "aria-label": "What goes here", class: "grid grid-cols-2 overflow-hidden rounded-lg border" },
-        ["subject", "activity"].map((kind) =>
-          h(
-            "button",
-            {
-              type: "button",
-              "aria-pressed": String(state.kind === kind),
-              class: `btn rounded-none ${state.kind === kind ? TOGGLE_ON : TOGGLE_OFF}`,
-              onclick: () => {
-                state.kind = /** @type {"subject" | "activity"} */ (kind);
-                errorBox.replaceChildren();
-                drawKind();
-                drawFields();
-              },
-            },
-            kind === "subject" ? "Subject" : "Activity",
-          ),
-        ),
+        kinds.map(([kind, label]) => toggleButton({ label, isOn: state.kind === kind, className: "rounded-none", onClick: () => { state.kind = kind; errorBox.replaceChildren(); drawKind(); drawFields(); } })),
       ),
     );
   };
 
-  /* ---------- Add a subject without leaving the plotter ---------- */
+  /* ---------- A subject: its teacher, room, period and days ---------- */
 
-  /**
-   * "+ Add a subject": gives this section a subject with its teacher, saved in Teacher Loading (the
-   * same API and rules, like "Full load" on a 6th subject), then chooses it here (team decision,
-   * Nov 21, 2026).
-   */
-  const addSubject = async () => {
-    /** @type {import("@/api/teacher-loading.js").SectionLoading} */
-    let data;
-    try {
-      data = await getSectionLoading(termId, sectionId);
-    } catch (error) {
-      toast.error(error);
-      return;
-    }
-    if (data.addable.length === 0) {
-      showError(`There is no subject left to add to ${plotter.section.label}. Add the subject's name on the Subjects page (step 2) first.`);
-      return;
-    }
-    /** @type {number | null} */
-    let addedSubjectId = null;
-    openFormDialog({
-      title: `Add a subject to ${plotter.section.label}`,
-      description: `It is saved in Teacher Loading too, for ${termState.term?.name ?? "this term"}.`,
-      fields: [
-        { name: "subject_id", label: "Subject", type: "select", required: true, options: data.addable.map((item) => ({ value: item.id, label: item.name, hint: item.code ?? undefined })), help: "Not listed? Add its name on the Subjects page first." },
-        {
-          name: "teacher_id",
-          label: "Teacher",
-          type: "select",
-          required: true,
-          options: data.teachers.map((teacher) => {
-            const isFull = teacher.assigned >= teacher.limit;
-            return { value: teacher.id, label: teacher.name, hint: teacherHint(teacher, isFull), disabled: isFull };
-          }),
-          help: "A teacher with a full load (5 subjects) cannot be chosen.",
-        },
-      ],
-      submitLabel: "Add subject",
-      onSubmit: async (values) => {
-        const subjectName = data.addable.find(({ id }) => id === Number(values.subject_id))?.name;
-        const teacherName = data.teachers.find(({ id }) => id === Number(values.teacher_id))?.name;
-        await assignTeacher(termId, sectionId, Number(values.subject_id), Number(values.teacher_id));
-        addedSubjectId = Number(values.subject_id);
-        return `${subjectName} was added to ${plotter.section.label}, taught by ${teacherName}.`;
-      },
-      onClose: async () => {
-        if (addedSubjectId === null) return;
+  const addSubject = () =>
+    openAddSubject({
+      termId,
+      section: plotter.section,
+      onNoneLeft: showError,
+      // The new subject is chosen at once, with its teacher.
+      onAdded: async (subjectId) => {
         try {
           plotter.loading = (await getPlotter(termId, sectionId)).loading;
         } catch (error) {
           toast.error(error);
           return;
         }
-        state.loadingId = plotter.loading.find((item) => item.subject_id === addedSubjectId)?.id ?? null;
+        state.loadingId = plotter.loading.find((item) => item.subject_id === subjectId)?.id ?? null;
         state.teacherId = null;
         drawFields();
       },
     });
-  };
 
-  const addSubjectButton = () =>
-    isCurrentLocked ? null : h("button", { type: "button", class: "btn btn-quiet -mt-2 justify-start px-0 text-brand", onclick: () => addSubject() }, icon("plus"), "Add a subject to this section");
-
-  /* ---------- The fields ---------- */
+  /** @type {ReturnType<typeof activityFields> | null} */
+  let activity = null;
 
   const drawFields = () => {
     if (state.kind === "activity") {
-      drawActivity();
+      activity = tappedSlot
+        ? activityFields({ plotter, termId, slot: tappedSlot, day: target.day, activityId: current?.activity_id ?? null, area: fieldsArea, showError })
+        : null;
+      if (!tappedSlot) replace(fieldsArea, h("p", { class: "rounded-lg bg-surface-muted p-3 text-sm" }, "Activities go on a period of the bell schedule. Tap a period to add one."));
       return;
     }
-
-    // The subjects here come from Teacher Loading (a subject with its teacher, for this section and
-    // term), not from the Subjects page: say so plainly, with a way there, instead of an empty list.
     if (plotter.loading.length === 0) {
-      replace(
-        fieldsArea,
-        h(
-          "div",
-          { role: "status", class: "space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-50" },
-          h("p", { class: "font-semibold" }, `No subject is ready for ${plotter.section.label} yet.`),
-          h("p", null, "A subject shows here once it is given to this section with its teacher (Teacher Loading). Subjects made on the Subjects page are only the list of names to choose from."),
-          h("div", { class: "flex flex-wrap gap-2" },
-            isCurrentLocked ? null : h("button", { type: "button", class: "btn btn-primary", onclick: () => addSubject() }, icon("plus"), "Add a subject here"),
-            h("a", { href: `/teacher-loading?section=${sectionId}`, class: "btn btn-outline" }, icon("clipboard"), "Open Teacher Loading"),
-          ),
-          h("p", { class: "text-small" }, "Or choose Activity above for a class with no subject, like Flag Ceremony."),
-        ),
-      );
-      periodsArea.replaceChildren();
-      daysArea.replaceChildren();
+      drawNoSubjects();
       return;
     }
-
-    const subjectSelect = searchableSelect({
-      label: "Subject",
-      placeholder: "Choose the subject",
-      value: state.loadingId,
-      disabled: isCurrentLocked,
-      options: plotter.loading.map((item) => ({ value: item.id, label: item.subject, hint: `${item.teacher} · ${progressText(item)}` })),
-      onChange: (value) => {
-        state.loadingId = Number(value);
-        state.teacherId = null;
-        drawFields();
-      },
-    });
 
     const subject = loading();
-    const teacherSelect = searchableSelect({
+    replace(
+      fieldsArea,
+      searchableSelect({
+        label: "Subject",
+        placeholder: "Choose the subject",
+        value: state.loadingId,
+        disabled: isCurrentLocked,
+        options: plotter.loading.map((item) => ({ value: item.id, label: item.subject, hint: `${item.teacher} · ${progressText(item)}` })),
+        onChange: (value) => {
+          state.loadingId = Number(value);
+          state.teacherId = null;
+          drawFields();
+        },
+      }),
+      isCurrentLocked ? null : h("button", { type: "button", class: "btn btn-quiet -mt-2 justify-start px-0 text-brand", onclick: addSubject }, icon("plus"), "Add a subject to this section"),
+      teacherSelect(subject),
+      searchableSelect({
+        label: "Room",
+        placeholder: "Choose the room",
+        value: state.roomId,
+        disabled: isCurrentLocked,
+        options: plotter.rooms.map((room) => ({ value: room.id, label: room.label })),
+        help: plotter.section.home_room_id && state.roomId === plotter.section.home_room_id ? "The section's home room." : undefined,
+        onChange: (value) => {
+          state.roomId = Number(value);
+          refreshFree();
+        },
+      }),
+      periodsArea,
+      daysArea,
+    );
+    refreshFree();
+  };
+
+  /**
+   * The subjects here come from Teacher Loading (a subject with its teacher, for this section and
+   * term), not from the Subjects page: say so plainly, with a way there, instead of an empty list.
+   */
+  const drawNoSubjects = () => {
+    replace(
+      fieldsArea,
+      h(
+        "div",
+        { role: "status", class: "space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-50" },
+        h("p", { class: "font-semibold" }, `No subject is ready for ${plotter.section.label} yet.`),
+        h("p", null, "A subject shows here once it is given to this section with its teacher (Teacher Loading). Subjects made on the Subjects page are only the list of names to choose from."),
+        h("div", { class: "flex flex-wrap gap-2" },
+          isCurrentLocked ? null : h("button", { type: "button", class: "btn btn-primary", onclick: addSubject }, icon("plus"), "Add a subject here"),
+          h("a", { href: `/teacher-loading?section=${sectionId}`, class: "btn btn-outline" }, icon("clipboard"), "Open Teacher Loading"),
+        ),
+        h("p", { class: "text-small" }, "Or choose Activity above for a class with no subject, like Flag Ceremony."),
+      ),
+    );
+    periodsArea.replaceChildren();
+    daysArea.replaceChildren();
+  };
+
+  /**
+   * The teacher: the subject's teacher from the loading, another teacher, or a new one typed here.
+   * @param {Loading | undefined} subject
+   */
+  const teacherSelect = (subject) => {
+    /** @type {{ value: number, label: string, hint?: string }[]} */
+    let options = subject ? [{ value: subject.teacher_id, label: subject.teacher }] : [];
+    const select = searchableSelect({
       label: "Teacher",
       placeholder: subject ? subject.teacher : "Choose the subject first",
       value: chosenTeacherId(),
       disabled: !subject || isCurrentLocked,
-      options: subject ? [{ value: subject.teacher_id, label: subject.teacher }] : [],
+      options,
       help: subject ? "From the teacher loading. A new teacher here teaches all of this subject's classes in the section." : undefined,
       onChange: (value) => {
         state.teacherId = Number(value);
@@ -275,8 +269,8 @@ export function openClassDialog({ plotter, termId, target }) {
             const teacher = await quickAddTeacher({ first_name: parts.slice(0, -1).join(" "), last_name: parts[parts.length - 1] });
             toast.success(`${teacher.name} was added. Complete their record later on the Teachers page.`);
             state.teacherId = teacher.id;
-            teacherSelect.setOptions([...teacherOptions, { value: teacher.id, label: teacher.name }]);
-            teacherSelect.setValue(teacher.id);
+            select.setOptions([...options, { value: teacher.id, label: teacher.name }]);
+            select.setValue(teacher.id);
             refreshFree();
           } catch (error) {
             toast.error(error);
@@ -285,42 +279,17 @@ export function openClassDialog({ plotter, termId, target }) {
       },
     });
 
-    /** @type {{ value: number, label: string, hint?: string }[]} */
-    let teacherOptions = subject ? [{ value: subject.teacher_id, label: subject.teacher }] : [];
+    // Every teacher who may take it, loaded after the dialog opens.
     if (subject) {
       getTeacherChoices(termId, sectionId)
         .then((teachers) => {
-          teacherOptions = teachers.map((/** @type {any} */ teacher) => ({ value: teacher.id, label: teacher.name, hint: teacherHint(teacher) }));
-          if (!teacherOptions.some(({ value }) => value === subject.teacher_id)) teacherOptions.unshift({ value: subject.teacher_id, label: subject.teacher });
-          teacherSelect.setOptions(teacherOptions);
+          options = teachers.map((/** @type {any} */ teacher) => ({ value: teacher.id, label: teacher.name, hint: teacherHint(teacher) }));
+          if (!options.some(({ value }) => value === subject.teacher_id)) options.unshift({ value: subject.teacher_id, label: subject.teacher });
+          select.setOptions(options);
         })
         .catch(() => {});
     }
-
-    const roomSelect = searchableSelect({
-      label: "Room",
-      placeholder: "Choose the room",
-      value: state.roomId,
-      disabled: isCurrentLocked,
-      options: plotter.rooms.map((room) => ({ value: room.id, label: room.label })),
-      help: plotter.section.home_room_id && state.roomId === plotter.section.home_room_id ? "The section's home room." : undefined,
-      onChange: (value) => {
-        state.roomId = Number(value);
-        refreshFree();
-      },
-    });
-
-    replace(
-      fieldsArea,
-      subjectSelect,
-      addSubjectButton(),
-      teacherSelect,
-      roomSelect,
-      periodsArea,
-      daysArea,
-    );
-
-    refreshFree();
+    return select;
   };
 
   /* ---------- Where: the periods that fit (UI requirement 6), or a typed time ---------- */
@@ -334,18 +303,19 @@ export function openClassDialog({ plotter, termId, target }) {
     return freeReady;
   };
   const loadFree = async ({ quiet = false } = {}) => {
-    const subject = loading();
-    if (!subject) {
+    if (!loading()) {
       replace(periodsArea, h("p", { class: "field-help" }, "Choose the subject to see the periods it fits."));
       daysArea.replaceChildren();
       return;
     }
     const thisRequest = ++freeRequest;
-    if (!quiet) replace(periodsArea, h("div", { class: "skeleton h-11 w-full" }));
+    if (!quiet) {
+      replace(periodsArea, h("div", { class: "skeleton h-11 w-full" }));
+      state.free = null;
+    }
     try {
-      if (!quiet) state.free = null;
       const free = await getFreePeriods(termId, sectionId, { teacherId: chosenTeacherId(), roomId: state.roomId });
-      if (thisRequest !== freeRequest) return freeReady;
+      if (thisRequest !== freeRequest) return;
       state.free = free;
       drawPeriods();
     } catch (error) {
@@ -353,23 +323,21 @@ export function openClassDialog({ plotter, termId, target }) {
     }
   };
 
+  /** The periods this subject may go to; when editing, its own place counts as free. */
   const fits = () => {
     const subject = loading();
     if (!subject || !state.free) return [];
-    return fittingPeriods({
-      patterns: plotter.patterns,
-      loading: subject,
-      free: state.free,
-      editing: isEditing && tappedSlot && current ? { slotId: tappedSlot.id, days: plotter.entries.filter((entry) => entry.start_time === tappedSlot.start_time && entry.section_subject_id === current.section_subject_id).map(({ day }) => day), sameSubject: current.section_subject_id === state.loadingId } : undefined,
-    });
+    const editing = isEditing && tappedSlot && current
+      ? { slotId: tappedSlot.id, days: plotter.entries.filter((entry) => entry.start_time === tappedSlot.start_time && entry.section_subject_id === current.section_subject_id).map(({ day }) => day), sameSubject: current.section_subject_id === state.loadingId }
+      : undefined;
+    return fittingPeriods({ patterns: plotter.patterns, loading: subject, free: state.free, editing });
   };
 
-  /** The typed time: checked while it is chosen (the end must be after the start). */
+  /** The typed time: checked while it is chosen (the end after the start, inside the shift's hours). */
   const typedError = h("p", { class: "field-error", role: "alert", hidden: true });
   const checkTyped = () => {
     const start = startPicker.getValue();
     const end = endPicker.getValue();
-    // ...and inside the section's shift hours (Junior High, Nov 22, 2026).
     const message = start && end && minutesBetween(start, end) <= 0 ? "The end time must be after the start time." : (shiftHoursProblem(plotter.section.shift_window, start, end) ?? "");
     typedError.textContent = message;
     typedError.hidden = !message;
@@ -377,6 +345,10 @@ export function openClassDialog({ plotter, termId, target }) {
   };
   const startPicker = timePicker({ label: "Start time", onChange: () => checkTyped() });
   const endPicker = timePicker({ label: "End time", onChange: () => checkTyped() });
+  const typeTime = (/** @type {boolean} */ typing) => {
+    state.typing = typing;
+    drawPeriods();
+  };
 
   const drawTyping = () => {
     replace(
@@ -385,7 +357,7 @@ export function openClassDialog({ plotter, termId, target }) {
       h("div", { class: "flex flex-wrap gap-4" }, startPicker, endPicker),
       typedError,
       h("p", { class: "field-help" }, "A new time becomes a period of the bell schedule, so the conflict rules and the Class Program still work. It must not overlap a period or a break."),
-      plotter.patterns.length > 0 ? h("button", { type: "button", class: "btn btn-quiet px-0 text-brand", onclick: () => { state.typing = false; drawPeriods(); } }, icon("arrow-left"), "Choose a period instead") : null,
+      plotter.patterns.length > 0 ? h("button", { type: "button", class: "btn btn-quiet px-0 text-brand", onclick: () => typeTime(false) }, icon("arrow-left"), "Choose a period instead") : null,
     );
     drawDays(null);
   };
@@ -395,100 +367,84 @@ export function openClassDialog({ plotter, termId, target }) {
       drawTyping();
       return;
     }
-    const subject = /** @type {import("@/lib/schedule.js").Loading} */ (loading());
-    const options = fits();
-    const shownDay = (/** @type {{ freeDays: number[] }} */ fit) => fit.freeDays.includes(target.day);
-    // The tapped day's periods first, the others after.
-    options.sort((a, b) => Number(shownDay(b)) - Number(shownDay(a)) || a.slot.start_time.localeCompare(b.slot.start_time));
-
-    if (state.slotId !== null && !options.some(({ slot }) => slot.id === state.slotId)) {
-      state.slotId = options.find(shownDay)?.slot.id ?? null;
-    }
-
+    const subject = /** @type {Loading} */ (loading());
     const left = minutesLeft(subject);
-    // The period that was tapped but cannot be offered: say why, in plain words.
-    const tappedBusy = tappedSlot && !options.some(({ slot }) => slot.id === tappedSlot.id)
-      ? (state.free?.find(({ slot_id: slotId }) => slotId === tappedSlot.id)?.busy ?? []).filter(({ day }) => day === target.day)
-      : [];
-    const tooLong = tappedSlot && !tappedSlot.is_break && tappedSlot.minutes > left && tappedBusy.length === 0 && !options.some(({ slot }) => slot.id === tappedSlot.id);
-    const header = h(
-      "div",
-      { class: "space-y-2" },
+    const isOnTappedDay = (/** @type {Fit} */ fit) => fit.freeDays.includes(target.day);
+    // The tapped day's periods first, the others after.
+    const options = fits().sort((a, b) => Number(isOnTappedDay(b)) - Number(isOnTappedDay(a)) || a.slot.start_time.localeCompare(b.slot.start_time));
+    if (state.slotId !== null && !options.some(({ slot }) => slot.id === state.slotId)) {
+      state.slotId = options.find(isOnTappedDay)?.slot.id ?? null;
+    }
+    const chosen = options.find(({ slot }) => slot.id === state.slotId) ?? null;
+
+    replace(
+      periodsArea,
       h(
         "div",
         { class: "flex flex-wrap items-baseline justify-between gap-2" },
         h("p", { class: "field-label" }, "Period"),
-        h("p", { class: "field-help" }, subject.target ? `${subject.subject}: ${progressText(subject)}.` : left === Infinity ? `${subject.subject}: ${subject.scheduled_minutes} mins a week on the schedule so far.` : left > 0 ? `${subject.subject}: ${left} mins a week still to place.` : `${subject.subject} is complete.`),
+        h("p", { class: "field-help" }, progressLine(subject, left)),
       ),
-      tappedSlot && (tappedBusy.length || tooLong)
-        ? h(
-            "p",
-            { class: "rounded-lg bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100" },
-            `${slotTimeLabel(tappedSlot)} is not offered. `,
-            tappedBusy.length ? tappedBusy.map(({ day, reason }) => `${DAY_NAMES[day]}: ${reason}`).join(" ") : `It is ${tappedSlot.minutes} mins, more than the ${left} mins left.`,
-          )
-        : null,
-    );
-
-    // Every period of the bell schedule as a block, so the scheduler sees why one cannot be used
-    // before saving: Available (choose it), Selected, or Full / Too long (disabled, with the reason).
-    const blocks = [
-      ...options.map((fit) => ({ ...fit, reason: null })),
-      ...plotter.patterns.flatMap((pattern) => pattern.slots.filter((slot) => !slot.is_break && !options.some((fit) => fit.slot.id === slot.id)).map((slot) => {
-        const period = state.free?.find(({ slot_id: slotId }) => slotId === slot.id);
-        const busy = period && period.free_days.length === 0 ? period.busy[0]?.reason : null;
-        return { slot, pattern, freeDays: /** @type {number[]} */ ([]), reason: busy ? { badge: "Full", text: busy } : { badge: "Too long", text: `It is ${slot.minutes} mins; ${left} mins are left for ${subject.subject}.` } };
-      }).sort((a, b) => a.slot.start_time.localeCompare(b.slot.start_time))),
-    ];
-
-    replace(
-      periodsArea,
-      header,
+      tappedNote(options, left),
       left <= 0
-          ? h("p", { class: "rounded-lg bg-surface-muted p-3 text-sm" }, "This subject already has all its minutes. Choose another subject, or remove one of its classes first.")
-          : [
-              options.length === 0 ? h("p", { role: "status", class: "rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100" }, "No period is free for this subject now: each one below says why. Try another room or teacher, or free a period first.") : null,
-              h(
-                "div",
-                { role: "radiogroup", "aria-label": "Period", class: "grid max-h-64 gap-2 overflow-y-auto sm:grid-cols-2" },
-                blocks.map(({ slot, pattern, freeDays, reason }) => {
-                  const isChosen = !reason && state.slotId === slot.id;
-                  return h(
-                    "button",
-                    {
-                      type: "button",
-                      role: "radio",
-                      "aria-checked": String(isChosen),
-                      "aria-disabled": reason ? "true" : null,
-                      title: reason?.text,
-                      class: `min-h-11 rounded-lg border px-3 py-2 text-left text-sm ${reason ? "cursor-not-allowed border-dashed bg-surface-muted text-muted-foreground" : isChosen ? "border-brand bg-brand-soft ring-1 ring-brand" : "hover:border-brand hover:bg-surface-muted"}`,
-                      onclick: () => {
-                        if (reason) {
-                          showError(`${slotTimeLabel(slot)} cannot be used: ${reason.text}`);
-                          return;
-                        }
-                        state.slotId = slot.id;
-                        drawPeriods();
-                      },
-                    },
-                    h("span", { class: "flex items-center justify-between gap-2" }, h("span", { class: "font-medium" }, slotTimeLabel(slot), slot.is_async ? h("span", { class: "badge ml-1 bg-sky-100 text-sky-900 dark:bg-sky-900 dark:text-sky-100" }, "Async") : null), reason ? h("span", { class: "badge shrink-0 bg-surface text-muted-foreground" }, reason.badge) : isChosen ? h("span", { class: "badge shrink-0 bg-brand text-white" }, "Selected") : h("span", { class: "badge shrink-0 bg-success/10 text-success" }, "Available")),
-                    h("span", { class: "block text-small" }, reason ? reason.text : `${classMinutes(subject, slot) < slot.minutes ? `Uses ${slotTimeLabel({ ...slot, end_time: classEnd(subject, slot) })} (${classMinutes(subject, slot)} mins)` : `${slot.minutes} mins`} · ${plotter.patterns.length > 1 ? `${pattern.name} · ` : ""}free ${freeDays.map((day) => DAY_NAMES[day].slice(0, 3)).join(", ")}`),
-                  );
+        ? h("p", { class: "rounded-lg bg-surface-muted p-3 text-sm" }, "This subject already has all its minutes. Choose another subject, or remove one of its classes first.")
+        : [
+            options.length === 0 ? h("p", { role: "status", class: `${NOTE} p-3` }, "No period is free for this subject now: each one below says why. Try another room or teacher, or free a period first.") : null,
+            h(
+              "div",
+              { role: "radiogroup", "aria-label": "Period", class: "grid max-h-64 gap-2 overflow-y-auto sm:grid-cols-2" },
+              periodBlocks({ patterns: plotter.patterns, fits: options, free: state.free, left, subjectName: subject.subject }).map((block) =>
+                periodButton(block, {
+                  subject,
+                  isChosen: !block.reason && state.slotId === block.slot.id,
+                  showPattern: plotter.patterns.length > 1,
+                  onClick: () => {
+                    if (block.reason) {
+                      showError(`${slotTimeLabel(block.slot)} cannot be used: ${block.reason.text}`);
+                      return;
+                    }
+                    state.slotId = block.slot.id;
+                    drawPeriods();
+                  },
                 }),
               ),
-            ],
+            ),
+          ],
       // Typing a time is the other way, kept out of the way when the bell schedule has periods.
-      left > 0 ? h("button", { type: "button", class: "btn btn-quiet px-0 text-small text-muted-foreground", onclick: () => { state.typing = true; drawPeriods(); } }, icon("clock"), "Other time… (type the start and end)") : null,
+      left > 0 ? h("button", { type: "button", class: "btn btn-quiet px-0 text-small text-muted-foreground", onclick: () => typeTime(true) }, icon("clock"), "Other time… (type the start and end)") : null,
+      chosen?.slot.is_async ? h("p", { class: "rounded-lg bg-sky-50 p-2 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-100" }, "Asynchronous session: this class needs no room, so the room above is not used.") : null,
     );
-
-    const chosen = options.find(({ slot }) => slot.id === state.slotId) ?? null;
-    if (chosen?.slot.is_async) periodsArea.append(h("p", { class: "rounded-lg bg-sky-50 p-2 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-100" }, "Asynchronous session: this class needs no room, so the room above is not used."));
     drawDays(chosen);
   };
 
   /**
+   * How far along the subject is, said above the periods.
+   * @param {Loading} subject
+   * @param {number} left
+   */
+  const progressLine = (subject, left) => {
+    if (subject.target) return `${subject.subject}: ${progressText(subject)}.`;
+    if (left === Infinity) return `${subject.subject}: ${subject.scheduled_minutes} mins a week on the schedule so far.`;
+    return left > 0 ? `${subject.subject}: ${left} mins a week still to place.` : `${subject.subject} is complete.`;
+  };
+
+  /**
+   * The period that was tapped but cannot be offered: why, in plain words.
+   * @param {Fit[]} options
+   * @param {number} left
+   */
+  const tappedNote = (options, left) => {
+    if (!tappedSlot || options.some(({ slot }) => slot.id === tappedSlot.id)) return null;
+    const busy = (state.free?.find(({ slot_id: slotId }) => slotId === tappedSlot.id)?.busy ?? []).filter(({ day }) => day === target.day);
+    const isTooLong = !tappedSlot.is_break && tappedSlot.minutes > left && busy.length === 0;
+    if (!busy.length && !isTooLong) return null;
+    const why = busy.length ? busy.map(({ day, reason }) => `${DAY_NAMES[day]}: ${reason}`).join(" ") : `It is ${tappedSlot.minutes} mins, more than the ${left} mins left.`;
+    return h("p", { class: NOTE }, `${slotTimeLabel(tappedSlot)} is not offered. `, why);
+  };
+
+  /**
    * The days of the chosen period. Busy days cannot be picked and say why.
-   * @param {null | { slot: TimeSlot, pattern: DayPattern, freeDays: number[], busy: { day: number, reason: string }[] }} chosen
+   * @param {Fit | null} chosen
    */
   const drawDays = (chosen) => {
     const allDays = chosen ? chosen.pattern.days : [1, 2, 3, 4, 5];
@@ -499,204 +455,81 @@ export function openClassDialog({ plotter, termId, target }) {
     }
 
     const subject = loading();
-    const minutes = chosen ? classMinutes(loading(), chosen.slot) : 0;
-    const total = minutes * state.days.length;
+    const total = chosen && subject ? classMinutes(subject, chosen.slot) * state.days.length : 0;
     const left = subject ? minutesLeft(subject) : 0;
-
     replace(
       daysArea,
-      h(
-        "fieldset",
-        { class: "space-y-2" },
-        h("legend", { class: "field-label" }, "Days"),
-        h(
-          "div",
-          { class: "flex flex-wrap gap-2" },
-          allDays.map((day) => {
-            const isUsable = usable.includes(day);
-            const isOn = state.days.includes(day);
-            return h(
-              "button",
-              {
-                type: "button",
-                "aria-pressed": String(isOn),
-                disabled: !isUsable || isCurrentLocked,
-                class: `btn min-w-16 border ${isOn ? TOGGLE_ON : TOGGLE_OFF}`,
-                onclick: () => {
-                  state.days = isOn ? state.days.filter((item) => item !== day) : [...state.days, day].sort();
-                  drawDays(chosen);
-                },
-              },
-              DAY_NAMES[day].slice(0, 3),
-            );
-          }),
-        ),
-        chosen && chosen.busy.length > 0 ? h("ul", { class: "space-y-1" }, chosen.busy.map(({ day, reason }) => h("li", { class: "text-small text-muted-foreground" }, `${DAY_NAMES[day]}: ${reason}`))) : null,
-        chosen && subject && total > left && !isEditing ? h("p", { class: "field-help text-warning" }, `This adds ${total} mins, ${total - left} more than ${subject.subject} still needs. It will be saved and flagged.`) : null,
+      dayToggles(
+        { days: allDays, chosen: state.days, isUsable: (day) => usable.includes(day), disabled: isCurrentLocked, onChange: (days) => { state.days = days; drawDays(chosen); } },
+        [
+          chosen && chosen.busy.length > 0 ? h("ul", { class: "space-y-1" }, chosen.busy.map(({ day, reason }) => h("li", { class: "text-small text-muted-foreground" }, `${DAY_NAMES[day]}: ${reason}`))) : null,
+          subject && total > left && !isEditing ? h("p", { class: "field-help text-warning" }, `This adds ${total} mins, ${total - left} more than ${subject.subject} still needs. It will be saved and flagged.`) : null,
+        ],
       ),
     );
-  };
-
-  /* ---------- Activities: Flag Ceremony, Catch-up Friday... ---------- */
-
-  const drawActivity = () => {
-    if (!tappedSlot) {
-      replace(fieldsArea, h("p", { class: "rounded-lg bg-surface-muted p-3 text-sm" }, "Activities go on a period of the bell schedule. Tap a period to add one."));
-      return;
-    }
-    const pattern = plotter.patterns.find(({ slots }) => slots.some(({ id }) => id === tappedSlot.id));
-    /** @type {{ activityId: number | null, scope: "section" | "grade" | "all", days: number[] }} */
-    const activity = { activityId: current?.activity_id ?? null, scope: "section", days: [target.day] };
-    const review = h("div");
-
-    const draw = () => {
-      replace(
-        fieldsArea,
-        searchableSelect({
-          label: "Activity",
-          placeholder: "Choose or type the activity",
-          value: activity.activityId,
-          help: "Like Flag Ceremony or Catch-up Friday. Type a new one to add it.",
-          options: plotter.activities.map((item) => ({ value: item.id, label: item.name })),
-          onChange: (value) => {
-            activity.activityId = Number(value);
-            review.replaceChildren();
-          },
-          // Activities are added right here, while plotting (team decision, Nov 21, 2026).
-          create: {
-            label: (typed) => `Add "${typed}"`,
-            run: async (typed) => {
-              try {
-                const { data } = /** @type {{ data: { id: number } }} */ (await api(`/school-years/${termState.term?.school_year.id}/activities`, { method: "POST", body: { name: typed, code: null } }));
-                plotter.activities.push({ id: data.id, name: typed });
-                activity.activityId = data.id;
-                toast.success(`${typed} was added.`);
-                draw();
-              } catch (error) {
-                showError(errorMessage(error));
-              }
-            },
-          },
-        }),
-        h(
-          "fieldset",
-          { class: "space-y-2" },
-          h("legend", { class: "field-label" }, "Apply to"),
-          h(
-            "div",
-            { class: "grid gap-2" },
-            /** @type {const} */ ([
-              ["section", "This section only"],
-              ["grade", `All Grade ${plotter.section.grade} sections (${plotter.apply_counts.grade})`],
-              ["all", `All my sections (${plotter.apply_counts.all})`],
-            ]).map(([value, label]) =>
-              h("button", { type: "button", "aria-pressed": String(activity.scope === value), class: `btn justify-start border ${activity.scope === value ? TOGGLE_ON : TOGGLE_OFF}`, onclick: () => { activity.scope = value; review.replaceChildren(); draw(); } }, label),
-            ),
-          ),
-        ),
-        h(
-          "fieldset",
-          { class: "space-y-2" },
-          h("legend", { class: "field-label" }, "Days"),
-          h(
-            "div",
-            { class: "flex flex-wrap gap-2" },
-            (pattern?.days ?? [target.day]).map((day) =>
-              h("button", { type: "button", "aria-pressed": String(activity.days.includes(day)), class: `btn min-w-16 border ${activity.days.includes(day) ? TOGGLE_ON : TOGGLE_OFF}`, onclick: () => { activity.days = activity.days.includes(day) ? activity.days.filter((item) => item !== day) : [...activity.days, day].sort(); review.replaceChildren(); draw(); } }, DAY_NAMES[day].slice(0, 3)),
-            ),
-          ),
-        ),
-        review,
-      );
-    };
-
-    activityState = activity;
-    activityReview = review;
-    draw();
-  };
-
-  /** @type {null | { activityId: number | null, scope: "section" | "grade" | "all", days: number[] }} */
-  let activityState = null;
-  /** @type {HTMLElement | null} */
-  let activityReview = null;
-  /** @type {any} */
-  let reviewed = null;
-
-  const saveActivity = async () => {
-    if (!tappedSlot || !activityState || !activityState.activityId || activityState.days.length === 0) {
-      showError("Choose an activity and at least one day.");
-      return;
-    }
-    const input = { slotId: tappedSlot.id, activity_id: activityState.activityId, scope: activityState.scope, days: activityState.days };
-
-    // A review comes first: which sections get it, and which classes it replaces.
-    if (!reviewed || JSON.stringify(reviewed.input) !== JSON.stringify(input)) {
-      const summary = await placeActivity(termId, sectionId, { ...input, preview: true });
-      reviewed = { input, summary };
-      const unplaced = summary.sections.flatMap((/** @type {any} */ section) => section.unplaced.map((/** @type {string} */ item) => `${section.label}: ${item}`));
-      const skipped = summary.sections.filter((/** @type {any} */ section) => section.skipped);
-      replace(
-        /** @type {HTMLElement} */ (activityReview),
-        h(
-          "div",
-          { class: "space-y-2 rounded-lg border p-3 text-sm" },
-          h("p", { class: "font-medium" }, `${summary.activity} goes on ${summary.placed_sections} ${summary.placed_sections === 1 ? "section" : "sections"} at ${summary.time}.`),
-          unplaced.length ? h("div", null, h("p", null, "These classes will be taken off and listed as not placed:"), h("ul", { class: "list-disc pl-5" }, unplaced.map((item) => h("li", null, item)))) : null,
-          skipped.length ? h("div", null, h("p", null, "Left out:"), h("ul", { class: "list-disc pl-5" }, skipped.map((/** @type {any} */ section) => h("li", null, `${section.label}: ${section.skipped}`)))) : null,
-          h("p", { class: "text-muted-foreground" }, "Press Save again to place it."),
-        ),
-      );
-      return;
-    }
-
-    const summary = await placeActivity(termId, sectionId, { ...input, preview: false });
-    toast.success(`${summary.activity} was placed on ${summary.placed_sections} ${summary.placed_sections === 1 ? "section" : "sections"}.`);
-    close();
   };
 
   /* ---------- Save and remove ---------- */
 
-  /** @param {string} message */
-  const showError = (message) => {
-    replace(errorBox, h("p", { class: "rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger" }, message));
+  /**
+   * The period of each chosen day: the chosen period, or a typed time made into a period.
+   * Null (with the reason shown) when something is missing.
+   * @returns {Promise<Map<number, number[]> | null>}  slot id => days
+   */
+  const placementsToSave = async () => {
+    if (state.days.length === 0) {
+      showError(state.typing ? "Choose at least one day." : "Choose a period and at least one day.");
+      return null;
+    }
+    if (!state.typing) {
+      if (!state.slotId) {
+        showError("Choose a period and at least one day.");
+        return null;
+      }
+      return new Map([[state.slotId, state.days]]);
+    }
+    const start = startPicker.getValue();
+    const end = endPicker.getValue();
+    if (!start || !end) {
+      showError("Choose the start and end time.");
+      return null;
+    }
+    if (!checkTyped()) {
+      showError(typedError.textContent ?? "Check the time.");
+      return null;
+    }
+    const slots = await resolvePeriod(termId, sectionId, { days: state.days, start_time: start, end_time: end });
+    /** @type {Map<number, number[]>} */
+    const placements = new Map();
+    for (const day of state.days) {
+      const slotId = slots[String(day)];
+      placements.set(slotId, [...(placements.get(slotId) ?? []), day]);
+    }
+    return placements;
   };
 
-  /** Explains a conflict in plain words, with buttons for the free rooms and teachers. */
-  const showConflict = (/** @type {unknown} */ error) => {
-    const details = conflictDetailsOf(error);
-    if (!details) {
-      showError(errorMessage(error));
+  const saveSubject = async () => {
+    const subject = loading();
+    if (!subject || (!state.roomId && !isAsyncChosen())) {
+      showError("Choose the subject and the room.");
       return;
     }
-    const subject = loading();
-    replace(
-      errorBox,
-      h(
-        "div",
-        { class: "space-y-2 rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm" },
-        h("p", { class: "font-medium text-danger" }, "Not saved. This clashes with:"),
-        h("ul", { class: "list-disc space-y-1 pl-5 text-danger" }, details.conflicts.map(({ message }) => h("li", null, message))),
-        details.suggestions.teachers.length && subject
-          ? h(
-              "div",
-              { class: "space-y-1" },
-              h("p", { class: "field-help" }, "Teachers free at this time:"),
-              h("div", { class: "flex flex-wrap gap-2" }, details.suggestions.teachers.map((teacher) =>
-                h("button", { type: "button", class: "btn btn-outline h-auto flex-col items-start py-1", onclick: () => { state.teacherId = teacher.id; errorBox.replaceChildren(); drawFields(); } }, h("span", null, teacher.name), h("span", { class: "text-small font-normal text-muted-foreground" }, `${teacher.teaches_subject ? `Teaches ${subject.subject} · ` : ""}${teacher.hours_per_week} hrs a week`), teacher.over_day_limit ? h("span", { class: "text-small font-medium text-warning" }, "Over 6 hrs that day") : null),
-              )),
-            )
-          : null,
-        details.suggestions.rooms.length
-          ? h(
-              "div",
-              { class: "space-y-1" },
-              h("p", { class: "field-help" }, "Rooms free at this time:"),
-              h("div", { class: "flex flex-wrap gap-2" }, details.suggestions.rooms.map((room) => h("button", { type: "button", class: "btn btn-outline", onclick: () => { state.roomId = room.id; errorBox.replaceChildren(); drawFields(); } }, room.label))),
-            )
-          : null,
-        details.suggestions.slots.length ? h("p", { class: "field-help" }, `Free periods for this teacher and room: ${details.suggestions.slots.map(({ label }) => label).join(", ")}.`) : null,
-      ),
-    );
+    const placements = await placementsToSave();
+    if (!placements) return;
+
+    const teacherId = chosenTeacherId();
+    if (teacherId && teacherId !== subject.teacher_id) {
+      await changeTeacher(termId, sectionId, { subjectId: subject.subject_id, teacherId });
+    }
+    for (const [slotId, days] of placements) {
+      await assignSlot(termId, sectionId, { slotId, section_subject_id: subject.id, room_id: isAsyncChosen() ? null : state.roomId, days });
+    }
+    // Moved to another period: take the class off its old one.
+    if (isEditing && tappedSlot && !placements.has(tappedSlot.id)) {
+      await clearSlot(termId, sectionId, { slotId: tappedSlot.id, days: [target.day] });
+    }
+    toast.success(`${subject.subject} ${isEditing ? "was changed" : "was added"}.`);
+    close();
   };
 
   const save = async () => {
@@ -707,63 +540,13 @@ export function openClassDialog({ plotter, termId, target }) {
       await freeReady;
       setBusy(saveButton, false);
       setBusy(saveButton, true);
-      if (state.kind === "activity") {
-        await saveActivity();
-        return;
+      if (state.kind === "subject") {
+        await saveSubject();
+      } else if (!activity) {
+        showError("Choose an activity and at least one day.");
+      } else if (await activity.save()) {
+        close();
       }
-
-      const subject = loading();
-      if (!subject || (!state.roomId && !isAsyncChosen())) {
-        showError("Choose the subject and the room.");
-        return;
-      }
-
-      // The period of each chosen day: a period from the list, or a typed time.
-      /** @type {Map<number, number[]>} slot id => days */
-      const placements = new Map();
-      if (state.typing) {
-        const start = startPicker.getValue();
-        const end = endPicker.getValue();
-        if (!start || !end) {
-          showError("Choose the start and end time.");
-          return;
-        }
-        if (!checkTyped()) {
-          showError("The end time must be after the start time.");
-          return;
-        }
-        if (state.days.length === 0) {
-          showError("Choose at least one day.");
-          return;
-        }
-        const slots = await resolvePeriod(termId, sectionId, { days: state.days, start_time: start, end_time: end });
-        for (const day of state.days) {
-          const slotId = slots[String(day)];
-          placements.set(slotId, [...(placements.get(slotId) ?? []), day]);
-        }
-      } else {
-        if (!state.slotId || state.days.length === 0) {
-          showError("Choose a period and at least one day.");
-          return;
-        }
-        placements.set(state.slotId, state.days);
-      }
-
-      if (chosenTeacherId() && chosenTeacherId() !== subject.teacher_id) {
-        await changeTeacher(termId, sectionId, { subjectId: subject.subject_id, teacherId: /** @type {number} */ (chosenTeacherId()) });
-      }
-
-      for (const [slotId, days] of placements) {
-        await assignSlot(termId, sectionId, { slotId, section_subject_id: subject.id, room_id: isAsyncChosen() ? null : state.roomId, days });
-      }
-
-      // Moved to another period: take the class off its old one.
-      if (isEditing && tappedSlot && !placements.has(tappedSlot.id)) {
-        await clearSlot(termId, sectionId, { slotId: tappedSlot.id, days: [target.day] });
-      }
-
-      toast.success(`${subject.subject} ${isEditing ? "was changed" : "was added"}.`);
-      close();
     } catch (error) {
       showConflict(error);
       toast.error(error);
@@ -774,19 +557,9 @@ export function openClassDialog({ plotter, termId, target }) {
     }
   };
 
-  // While the dialog is open, another scheduler may take a block: check again every 30 seconds and
-  // when the window comes back into focus, so a taken block turns Full before anyone saves.
-  function onFocus() {
-    if (loading()) refreshFree({ quiet: true });
-  }
-  recheck = setInterval(() => {
-    if (loading()) refreshFree({ quiet: true });
-  }, 30_000);
-  window.addEventListener("focus", onFocus);
-
   const remove = async () => {
     if (!tappedSlot || !current) return;
-    // The days chosen under Days (the tapped day at first), like before.
+    // The days chosen under Days (the tapped day at first).
     const days = state.days.length > 0 ? state.days : [target.day];
     const isSure = await confirmAction({
       title: `Remove ${current.subject ?? "this class"}?`,
@@ -806,6 +579,14 @@ export function openClassDialog({ plotter, termId, target }) {
       if (removeButton.isConnected) setBusy(removeButton, false);
     }
   };
+
+  // While the dialog is open, another scheduler may take a block: check again every 30 seconds and
+  // when the window comes back into focus, so a taken block turns Full before anyone saves.
+  function onFocus() {
+    if (loading()) refreshFree({ quiet: true });
+  }
+  recheck = setInterval(onFocus, 30_000);
+  window.addEventListener("focus", onFocus);
 
   drawKind();
   drawFields();

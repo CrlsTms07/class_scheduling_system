@@ -44,6 +44,7 @@ createdb ercihs_scheduling_updatedDB   # once; also: createdb ercihs_scheduling_
 php artisan migrate:fresh --seed
 php artisan serve                 # http://localhost:8000
 ./vendor/bin/pest
+php artisan app:check-data          # read only: duplicates, sections without adviser or room, overlaps (also on live with DB_URL)
 
 # web app
 cd frontend

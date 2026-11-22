@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { APPROVAL_TABS, entriesFor, sectionsFor } from "./approvals.js";
 
-const section = (id, status, pending, approved) => /** @type {any} */ ({ id, label: `S${id}`, status, pending_count: pending, approved_count: approved, flags: [] });
+const section = (/** @type {number} */ id, /** @type {string} */ status, /** @type {number} */ pending, /** @type {number} */ approved) => /** @type {any} */ ({ id, label: `S${id}`, status, pending_count: pending, approved_count: approved, flags: [] });
 const SECTIONS = [section(1, "pending", 40, 0), section(2, "approved", 0, 35), section(3, "draft", 0, 0), section(4, "rejected", 0, 0)];
 
 describe("approvals", () => {

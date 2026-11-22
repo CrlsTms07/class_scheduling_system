@@ -9,7 +9,7 @@ import { invalidate, load, setData } from "@/state/cache.js";
 /**
  * @typedef {"WHOLE_DAY" | "AM" | "PM" | "PART_TIME"} Shift
  * @typedef {{ subject_id: number, subject: string, code: string | null, scheduled_minutes: number, is_priority: boolean, is_active: boolean, teacher_id: number | null, teacher: string | null, placed_entries: number, locked_reason: string | null }} LoadingRow
- * @typedef {{ id: number, name: string, shift: Shift, assigned: number, limit: number, department?: string | null, from_level?: "JHS" | "SHS" | null }} LoadingTeacher
+ * @typedef {{ id: number, name: string, shift: Shift, assigned: number, limit: number, department?: string | null, from_level?: "JHS" | "SHS" | null, subjects?: number, advises?: string | null }} LoadingTeacher
  * @typedef {{ section: { id: number, label: string, level: "JHS" | "SHS", shift: Shift, track: string | null, adviser: string | null }, rows: LoadingRow[], addable: { id: number, name: string, code: string | null }[], teachers: LoadingTeacher[] }} SectionLoading
  */
 
@@ -62,7 +62,7 @@ export async function removeTeacher(termId, sectionId, subjectId) {
  * Copies the teachers of another term of the same school year, for one section or all.
  * @param {number} termId
  * @param {{ from_term_id: number, section_id: number | null }} body
- * @returns {Promise<{ copied: number, already_set: number, not_offered: number, teacher_unavailable: number }>}
+ * @returns {Promise<{ copied: number, already_set: number, not_offered: number, teacher_unavailable: number, full_load: number }>}
  */
 export async function copyLoading(termId, body) {
   const { data } = /** @type {{ data: any }} */ (await api(`/terms/${termId}/loading/copy`, { method: "POST", body }));
@@ -75,7 +75,7 @@ export async function copyLoading(termId, body) {
  * matched by section and subject names. With preview, only says what would be copied.
  * @param {number} termId
  * @param {{ from_term_id: number, preview: boolean }} body
- * @returns {Promise<{ copied: number, already_set: number, no_section: number, no_subject: number, not_offered: number, teacher_unavailable: number, sections: number, missing: string[] }>}
+ * @returns {Promise<{ copied: number, already_set: number, no_section: number, no_subject: number, not_offered: number, teacher_unavailable: number, full_load: number, sections: number, missing: string[] }>}
  */
 export async function importPrevious(termId, body) {
   const { data } = /** @type {{ data: any }} */ (await api(`/terms/${termId}/import-previous`, { method: "POST", body }));

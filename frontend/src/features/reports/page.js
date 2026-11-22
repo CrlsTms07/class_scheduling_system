@@ -140,7 +140,7 @@ export async function render(container, { query, navigate }) {
 
   const rooms = async () => {
     const data = await getRoomUsage(termId);
-    const total = data.buildings.reduce((sum, /** @type {any} */ building) => sum + building.rooms.length, 0);
+    const total = data.buildings.reduce((/** @type {number} */ sum, /** @type {any} */ building) => sum + building.rooms.length, 0);
     replace(
       panel,
       downloadButtons({ basePath: `/terms/${termId}/reports/room-usage`, label: "Room Usage" }),

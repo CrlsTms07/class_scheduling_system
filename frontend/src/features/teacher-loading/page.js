@@ -20,11 +20,13 @@ import { termState, termWord } from "@/state/term.js";
 
 /** @type {import("@/router.js").RenderPage} */
 export async function render(container, { query, navigate }) {
-  const term = termState.term;
-  if (!term) {
+  const selectedTerm = termState.term;
+  if (!selectedTerm) {
     container.append(h("div", { class: "p-4 sm:p-6" }, emptyState({ title: "No school year yet", text: "The Admin starts a school year on the School Years page." })));
     return;
   }
+  // Checked above, so the functions below can use it without checking again.
+  const term = selectedTerm;
 
   const view = query.get("view") === "teachers" ? "teachers" : "sections";
   const content = h("div", { class: "space-y-4" }, skeletonList(5));
@@ -107,7 +109,7 @@ export async function render(container, { query, navigate }) {
           ? h(
               "div",
               { role: "group", "aria-label": "Which sections", class: "grid gap-2" },
-              [[false, `Only ${section.label}`], [true, "All sections of my grade levels"]].map(([value, label]) => h("button", { type: "button", "aria-pressed": String(choice.wholeScope === value), class: toggle(choice.wholeScope === value), onclick: () => { choice.wholeScope = /** @type {boolean} */ (value); draw(); } }, label)),
+              /** @type {[boolean, string][]} */ ([[false, `Only ${section.label}`], [true, "All sections of my grade levels"]]).map(([value, label]) => h("button", { type: "button", "aria-pressed": String(choice.wholeScope === value), class: toggle(choice.wholeScope === value), onclick: () => { choice.wholeScope = value; draw(); } }, label)),
             )
           : null,
         result,

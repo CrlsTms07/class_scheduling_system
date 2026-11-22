@@ -20,7 +20,8 @@ class SchoolProfile
     public const FIXED = ['school_name', 'school_id', 'region', 'division', 'address', 'website', 'tagline'];
 
     /**
-     * The saved row with every empty field filled in from config/school.php.
+     * The saved row, with the fixed fields always from config/school.php (an old saved value,
+     * like "ERCIHS" for the name, must not show) and empty editable fields filled in from it.
      */
     public static function current(): object
     {
@@ -28,7 +29,10 @@ class SchoolProfile
         $defaults = config('school');
 
         $profile = $saved;
-        foreach ([...self::FIXED, ...self::EDITABLE] as $field) {
+        foreach (self::FIXED as $field) {
+            $profile[$field] = $defaults[$field] ?? null;
+        }
+        foreach (self::EDITABLE as $field) {
             $profile[$field] = filled($saved[$field] ?? null) ? $saved[$field] : ($defaults[$field] ?? null);
         }
 

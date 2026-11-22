@@ -57,7 +57,8 @@ export async function getFreePeriods(termId, sectionId, { teacherId, roomId }) {
  * Places a subject in a period on some days.
  * @param {number} termId
  * @param {number} sectionId
- * @param {{ slotId: number, section_subject_id: number, room_id: number, days: number[] }} input
+ * @param {{ slotId: number, section_subject_id: number, room_id: number | null, days: number[] }} input
+ *   room_id: null for an asynchronous session (Senior High), which needs no room
  */
 export async function assignSlot(termId, sectionId, { slotId, ...body }) {
   const { data } = /** @type {{ data: Plotter }} */ (await api(`/terms/${termId}/sections/${sectionId}/slots/${slotId}`, { method: "PUT", body }));

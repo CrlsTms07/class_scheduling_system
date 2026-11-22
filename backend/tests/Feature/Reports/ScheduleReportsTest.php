@@ -3,7 +3,6 @@
 use App\Models\User;
 use Database\Seeders\ReferenceDataSeeder;
 use Illuminate\Support\Facades\DB;
-use PhpOffice\PhpSpreadsheet\IOFactory;
 
 function reportGrade(int $grade): int
 {
@@ -115,7 +114,9 @@ describe('Teacher Program', function () {
         $text = workbookText($response);
 
         expect($response->headers->get('Content-Disposition'))->toContain('teacher-program-ana-reyes-first.csv')
-            ->and($text)->toContain('My School')
+            // The school name is fixed (config/school.php), whatever an old saved row says.
+            ->and($text)->toContain('Emmanuel Resurreccion Congressional Integrated High School')
+            ->and($text)->not->toContain('My School')
             ->and($text)->toContain('TEACHER PROGRAM')
             ->and($text)->toContain('ANA REYES')
             ->and($text)->toContain('7:00 AM – 7:45 AM')

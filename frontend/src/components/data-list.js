@@ -38,7 +38,7 @@ export function dataList({ items, columns, actions, label }) {
           "li",
           { class: "card space-y-2 p-4" },
           h("div", { class: "font-semibold text-accent" }, primary.cell(item)),
-          h("dl", { class: "grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" }, columns.filter((column) => column !== primary).flatMap((column) => [h("dt", { class: "text-muted-foreground" }, column.label), h("dd", null, column.cell(item))])),
+          h("dl", { class: "grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" }, columns.filter((column) => column !== primary).flatMap((column) => [h("dt", { class: "text-muted-foreground" }, column.label), h("dd", { class: "min-w-0 [overflow-wrap:anywhere]" }, column.cell(item))])),
           actions ? h("div", { class: "flex flex-wrap gap-2 pt-1" }, actions(item)) : null,
         ),
       ),

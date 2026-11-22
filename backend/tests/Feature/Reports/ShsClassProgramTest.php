@@ -6,7 +6,6 @@ use App\Models\User;
 use App\Services\ReportService;
 use Database\Seeders\ReferenceDataSeeder;
 use Illuminate\Support\Facades\DB;
-use PhpOffice\PhpSpreadsheet\IOFactory;
 
 function shsGrade(int $grade): int
 {

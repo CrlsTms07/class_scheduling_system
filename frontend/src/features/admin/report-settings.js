@@ -65,7 +65,7 @@ export async function render(container, { query, navigate }) {
           return "The school's contact details were saved.";
         },
       });
-    const row = (/** @type {string} */ label, /** @type {string | null} */ value) => [h("dt", { class: "text-muted-foreground" }, label), h("dd", { class: "font-medium" }, value || "–")];
+    const row = (/** @type {string} */ label, /** @type {string | null} */ value) => [h("dt", { class: "text-muted-foreground" }, label), h("dd", { class: "min-w-0 font-medium [overflow-wrap:anywhere]" }, value || "–")];
     replace(
       content,
       // The heading as it is printed on every form (Nov 22, 2026): the DepEd seal and the agency
@@ -129,6 +129,8 @@ export async function render(container, { query, navigate }) {
     }
     const list = await getRecords(`/terms/${term.id}/signatories`);
     // Each department's official form has its own block (team decision, Nov 21, 2026).
+    // "auto": filled in by the system (Conforme is the section's adviser), so it is not typed.
+    /** @type {Record<"JHS" | "SHS", { title: string, note: string, slots: { key: string, label: string, example?: string, auto?: boolean }[] }>} */
     const BLOCKS = {
       JHS: { title: "Junior High Class Program", note: "A 2×2 block.", slots: [
         { key: "prepared_by", label: "Prepared by", example: "Head Teacher III" },

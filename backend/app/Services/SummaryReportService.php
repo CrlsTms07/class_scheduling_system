@@ -11,6 +11,7 @@ use App\Models\SectionSubject;
 use App\Models\Teacher;
 use App\Models\User;
 use App\Support\ScheduleFormat;
+use App\Support\SchoolProfile;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -363,7 +364,7 @@ class SummaryReportService
     private function letterhead(string $title): array
     {
         return [
-            'school' => DB::table('school_profile')->first(),
+            'school' => SchoolProfile::current(),
             'logos' => $this->settings->logoDataUris(),
             'title' => $title,
         ];
@@ -375,7 +376,7 @@ class SummaryReportService
     public function teacherLoadSheet(array $data): ReportSheet
     {
         $rows = [
-            [DB::table('school_profile')->value('school_name')],
+            [SchoolProfile::current()->school_name],
             ['TEACHER LOAD REPORT'],
             [$data['term_label']],
             [],
@@ -408,7 +409,7 @@ class SummaryReportService
     public function gradeTimetableSheet(array $data): ReportSheet
     {
         $rows = [
-            [DB::table('school_profile')->value('school_name')],
+            [SchoolProfile::current()->school_name],
             [$data['title']],
             [$data['term_label']],
         ];

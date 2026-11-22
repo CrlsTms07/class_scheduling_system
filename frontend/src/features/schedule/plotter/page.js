@@ -7,6 +7,8 @@
  * - Placing: tap a period, or pick a subject and tap the periods that light up (they fit and are
  *   free, UI requirement 6), or drag a subject or a class. Everything else goes through the one
  *   "Add / Edit class" dialog (Must fix #10).
+ *
+ * The panels around the schedule are drawn by panels.js; this file holds what the taps do.
  */
 import { h, replace } from "@/lib/dom.js";
 import { icon } from "@/components/icons.js";
@@ -18,20 +20,22 @@ import { assignSlot, clearSchedule, conflictDetailsOf, getFreePeriods, getPlotte
 import { watch } from "@/state/cache.js";
 import { isColorCoding, session } from "@/state/session.js";
 import { termState } from "@/state/term.js";
-import { DAY_NAMES, FLAG_FIXES, STATUS_COLORS, STATUS_LABELS, dayTotals, entryAt, fittingPeriods, hasSubject, isComplete, nextSubject, patternOfSlot, planMove, progressPercent, progressText, subjectColor } from "@/lib/schedule.js";
+import { DAY_NAMES, STATUS_COLORS, STATUS_LABELS, entryAt, fittingPeriods, hasSubject, isComplete, nextSubject, patternOfSlot, planMove } from "@/lib/schedule.js";
 import { openClassDialog } from "./class-dialog.js";
 import { openSubmitDialog } from "./submit-dialog.js";
 import { dayCardsView, gridView, phoneDayView, readView, saveView } from "./schedule-views.js";
 import { enableDrag } from "./drag.js";
+import { flagsPanel, setupNotice, statusNotices, subjectList, weekStrip } from "./panels.js";
 
 /** @typedef {import("@/lib/schedule.js").Plotter} Plotter */
 /** @typedef {import("@/lib/schedule.js").TimeSlot} TimeSlot */
+
+const CRUMB = "inline-flex min-h-11 min-w-11 items-center justify-center px-1 hover:text-brand";
 
 /** @type {import("@/router.js").RenderPage} */
 export async function render(container, { params }) {
   const sectionId = Number(params.sectionId);
   const term = termState.term;
-
   if (!term) {
     container.append(h("p", { class: "p-6 text-sm" }, "There is no school year yet. The Admin starts one on the School Years page."));
     return;
@@ -55,18 +59,42 @@ export async function render(container, { params }) {
   /** @type {{ view: "days" | "grid", day: number, patternId: number | null, placingId: number | null, fitting: Set<string>, removed: string[] }} */
   const ui = { view: readView(), day: 1, patternId: null, placingId: null, fitting: new Set(), removed: [] };
 
-  const draw = () => {
-    const { section, status, loading, patterns, entries, flags } = plotter;
-    const canEdit = plotter.can_edit;
-    const isColored = isColorCoding();
-    const placing = loading.find(({ id }) => id === ui.placingId);
-    const viewProps = { plotter, isColored, canEdit, fitting: ui.fitting, onTap };
-    // Complete: on all the days of its MATATAG target (Junior High), or at least once when it has none.
-    const completeCount = loading.filter(isComplete).length;
-    // One clear way to plot (Nov 21, 2026): the first subject not complete is marked Next.
-    const next = canEdit ? nextSubject(loading) : null;
+  const openDialogAt = (/** @type {import("./class-dialog.js").ClassTarget} */ target) => openClassDialog({ plotter, termId, target });
 
-    const header = h(
+  /* ---------- The page ---------- */
+
+  const draw = () => {
+    const { section, status, loading } = plotter;
+    const isColored = isColorCoding();
+    // One clear way to plot (Nov 21, 2026): the first subject not complete is marked Next.
+    const next = plotter.can_edit ? nextSubject(loading) : null;
+    const subjects = subjectList(plotter, { placingId: ui.placingId, next, isColored, onChoose: choosePlacing });
+
+    replace(
+      container,
+      h(
+        "div",
+        { class: "space-y-4 p-4 sm:p-6" },
+        h("nav", { "aria-label": "Breadcrumb", class: "flex flex-wrap items-center gap-1 text-sm text-muted-foreground" }, h("a", { href: "/dashboard", class: CRUMB }, "Home"), " · ", h("a", { href: "/schedule", class: CRUMB }, "Schedule"), " · ", h("span", { class: "text-brand", "aria-current": "page" }, section.label)),
+        header(),
+        statusNotices(plotter, { removed: ui.removed, reviseButton }),
+        flagsPanel(plotter, { onFix: choosePlacing }),
+        setupNotice(plotter, { onAddByTime: () => openDialogAt({ day: 1 }) }),
+        h(
+          "div",
+          { class: "gap-4 space-y-4 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:space-y-0" },
+          h("div", { class: "lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7rem)] lg:self-start lg:overflow-y-auto" }, subjects),
+          h("div", { class: `min-w-0 ${subjects ? "" : "lg:col-span-2"}` }, schedule(next, isColored)),
+        ),
+        plotter.can_plot && (status === "draft" || status === "rejected") && plotter.entries.length > 0 ? h("div", { class: "border-t pt-4" }, clearButton()) : null,
+      ),
+    );
+  };
+
+  /** The section's name and status, Submit, and the Class Program downloads. */
+  const header = () => {
+    const { section, status } = plotter;
+    return h(
       "div",
       { class: "card overflow-hidden" },
       h(
@@ -83,340 +111,124 @@ export async function render(container, { params }) {
             h("p", { class: "text-sm text-muted-foreground" }, `Adviser: ${section.adviser ?? "None yet"} · ${section.level === "SHS" ? "Senior High" : "Junior High"} · ${term.name}, SY ${term.school_year.name}`),
           ),
         ),
-        canEdit && status === "draft" ? h("button", { type: "button", class: "btn btn-primary", onclick: () => openSubmitDialog({ plotter, termId }) }, icon("send"), "Submit for approval") : null,
+        plotter.can_edit && status === "draft" ? h("button", { type: "button", class: "btn btn-primary", onclick: () => openSubmitDialog({ plotter, termId }) }, icon("send"), "Submit for approval") : null,
       ),
       h(
         "div",
         { class: "flex flex-wrap items-center gap-1 border-t bg-surface-muted px-4 py-1" },
         h("span", { class: "mr-2 text-small font-medium uppercase tracking-wide text-muted-foreground" }, "Class Program"),
-        ["pdf", "csv"].map((extension) => downloadButton(extension)),
-      ),
-    );
-
-    const alerts = [];
-    if (status === "pending") alerts.push(notice("success", "Submitted. This schedule is locked while it waits for the Admin."));
-    if (status === "approved") alerts.push(notice("success", `Approved${plotter.last_review ? ` by ${plotter.last_review.reviewed_by}` : ""}. This schedule is locked.`));
-    if (status === "rejected") {
-      alerts.push(
-        h(
-          "div",
-          { class: "space-y-2" },
-          notice("danger", `Rejected${plotter.last_review ? ` by ${plotter.last_review.reviewed_by}: ${plotter.last_review.remarks}` : "."}`),
-          plotter.can_plot ? reviseButton() : null,
-        ),
-      );
-    }
-    if (status === "draft" && plotter.last_review && plotter.last_review.action !== "approve") {
-      alerts.push(notice("danger", `${plotter.last_review.action === "reject" ? "Rejected" : "Reopened"} by ${plotter.last_review.reviewed_by}: ${plotter.last_review.remarks}`));
-    }
-    if (ui.removed.length) {
-      alerts.push(h("div", { role: "alert", class: "rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger" }, h("p", { class: "font-medium" }, "These classes could not come back. Please place them again:"), h("ul", { class: "list-disc pl-5" }, ui.removed.map((item) => h("li", null, item)))));
-    }
-
-    const setup =
-      loading.length === 0
-        ? notice("info", h("span", null, "This section has no subjects with teachers yet. ", h("a", { href: `/teacher-loading?section=${sectionId}`, class: "inline-flex min-h-11 items-center font-medium text-brand underline" }, "Open Teacher Loading"), " to add them first."))
-        : patterns.length === 0
-          ? h(
-              "div",
-              { class: "card space-y-2 p-4" },
-              h("p", { class: "text-sm" }, "This section has no class times yet. Add its first class by choosing the start and end time; the class hours are made from it."),
-              h("div", { class: "flex flex-wrap gap-2" }, canEdit ? h("button", { type: "button", class: "btn btn-primary", onclick: () => openClassDialog({ plotter, termId, target: { day: 1 } }) }, icon("plus"), "Add a class by time") : null, h("a", { href: "/time-slots", class: "btn btn-outline" }, icon("clock"), "Class Hours (optional)")),
-            )
-          : null;
-
-    const subjects = loading.length
-      ? h(
-          "details",
-          { class: "card group lg:open", open: window.matchMedia("(min-width: 1024px)").matches },
-          h(
-            "summary",
-            { class: "flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 p-3 font-medium" },
-            h("span", null, `Subjects · ${completeCount} of ${loading.length} placed`),
-            icon("chevron-down", "size-4 transition group-open:rotate-180"),
-          ),
-          h(
-            "div",
-            { class: "space-y-2 p-3 pt-0" },
-            canEdit ? h("p", { class: "field-help" }, next ? "Start with the subject marked Next: tap it, then tap a lit period. When it is complete, the next one is chosen for you." : "Every subject is complete. Check the flags, then submit for approval.") : null,
-            h(
-              "ul",
-              { class: "space-y-2" },
-              loading.map((item) => {
-                const isOn = ui.placingId === item.id;
-                const subjectFlags = flags.filter((flag) => flag.section_subject_id === item.id);
-                const progress = progressPercent(item);
-                const isDone = isComplete(item);
-                const isNext = next?.id === item.id;
-                return h(
-                  "li",
-                  null,
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      "aria-pressed": String(isOn),
-                      disabled: !canEdit,
-                      "data-drag": canEdit ? `new:${item.id}` : null,
-                      class: `w-full rounded-lg border p-2 text-left text-sm ${subjectColor(item.id, isColored)} ${isOn ? "ring-2 ring-brand" : isNext ? "ring-2 ring-brand/40" : ""}`,
-                      onclick: () => choosePlacing(isOn ? null : item.id),
-                    },
-                    h(
-                      "span",
-                      { class: "flex items-start justify-between gap-2" },
-                      h("span", { class: "flex items-center gap-1 font-medium" }, isDone ? icon("check", "size-4 shrink-0") : null, item.subject),
-                      h("span", { class: "flex shrink-0 gap-1" }, isNext ? h("span", { class: "badge bg-brand text-white" }, "Next") : null, item.is_priority ? h("span", { class: "badge bg-surface text-foreground" }, "Priority") : null),
-                    ),
-                    h("span", { class: "block text-small opacity-90" }, item.teacher),
-                    h("span", { class: "block text-small opacity-90" }, progressText(item)),
-                    h("span", { class: "mt-1 block h-1.5 overflow-hidden rounded-full bg-black/10" }, h("span", { class: "block h-full bg-current opacity-60", style: { width: `${progress}%` } })),
-                    subjectFlags.length ? h("span", { class: "mt-1 flex items-center gap-1 text-small font-medium text-danger" }, icon("warning"), subjectFlags[0].message) : null,
-                  ),
-                );
-              }),
-            ),
-          ),
-        )
-      : null;
-
-    const viewSwitch = h(
-      "div",
-      { role: "tablist", "aria-label": "View", class: "grid w-full grid-cols-2 overflow-hidden rounded-lg border sm:w-80 max-md:portrait:hidden" },
-      /** @type {const} */ ([["days", "Day cards"], ["grid", "Weekly grid"]]).map(([value, label]) =>
-        h("button", { type: "button", role: "tab", "aria-selected": String(ui.view === value), class: `btn rounded-none ${ui.view === value ? "bg-brand text-white" : "bg-surface"}`, onclick: () => { ui.view = value; saveView(value); draw(); } }, label),
-      ),
-    );
-
-    const pattern = patterns.find(({ id }) => id === ui.patternId) ?? patterns[0];
-    const wide =
-      patterns.length === 0
-        ? null
-        : ui.view === "days"
-          ? dayCardsView(viewProps)
-          : h(
-              "div",
-              { class: "space-y-3" },
-              patterns.length > 1 ? h("div", { role: "tablist", "aria-label": "Bell schedule", class: "flex flex-wrap gap-2" }, patterns.map((item) => h("button", { type: "button", role: "tab", "aria-selected": String(item.id === pattern.id), class: `btn border ${item.id === pattern.id ? "border-brand bg-brand text-white" : "bg-surface"}`, onclick: () => { ui.patternId = item.id; draw(); } }, item.name))) : null,
-              gridView(viewProps, pattern),
-            );
-
-    const schedule =
-      patterns.length === 0
-        ? null
-        : h(
-            "div",
-            { class: "space-y-3", "data-schedule": "" },
-            placing
-              ? h(
-                  "div",
-                  { role: "status", class: "sticky top-[5rem] z-20 flex items-center justify-between gap-2 rounded-lg border-2 border-brand bg-surface p-2 text-sm shadow" },
-                  h("p", { class: "min-w-0" }, h("strong", null, `Placing ${placing.subject}. `), ui.fitting.size ? "Tap a lit period." : "No free period fits it right now."),
-                  h("button", { type: "button", class: "btn btn-outline shrink-0", onclick: () => choosePlacing(null) }, icon("check"), "Done"),
-                )
-              : null,
-            next && !placing
-              ? h("button", { type: "button", class: "btn btn-primary w-full sm:w-auto", onclick: () => choosePlacing(next.id) }, icon("plus"), `Place next: ${next.subject}`)
-              : null,
-            weekStrip(),
-            h(
-              "div",
-              { class: "flex flex-wrap items-center justify-between gap-2" },
-              viewSwitch,
-              h("button", { type: "button", class: "btn btn-quiet", "aria-pressed": String(isColored), onclick: toggleColors }, icon("table"), isColored ? "Colors: on" : "Colors: off"),
-            ),
-            h("div", { class: "max-md:portrait:hidden" }, wide),
-            h("div", { class: "hidden max-md:portrait:block" }, phoneDayView(viewProps, ui.day, (day) => { ui.day = day; draw(); })),
-          );
-
-    const clearArea =
-      plotter.can_plot && (status === "draft" || status === "rejected") && entries.length > 0
-        ? h("div", { class: "border-t pt-4" }, clearButton())
-        : null;
-
-    replace(
-      container,
-      h(
-        "div",
-        { class: "space-y-4 p-4 sm:p-6" },
-        h("nav", { "aria-label": "Breadcrumb", class: "flex flex-wrap items-center gap-1 text-sm text-muted-foreground" }, h("a", { href: "/dashboard", class: "inline-flex min-h-11 min-w-11 items-center justify-center px-1 hover:text-brand" }, "Home"), " · ", h("a", { href: "/schedule", class: "inline-flex min-h-11 min-w-11 items-center justify-center px-1 hover:text-brand" }, "Schedule"), " · ", h("span", { class: "text-brand", "aria-current": "page" }, section.label)),
-        header,
-        alerts,
-        flagsPanel(),
-        setup,
-        h("div", { class: "gap-4 space-y-4 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:space-y-0" }, h("div", { class: "lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7rem)] lg:self-start lg:overflow-y-auto" }, subjects), h("div", { class: `min-w-0 ${subjects ? "" : "lg:col-span-2"}` }, schedule)),
-        clearArea,
+        ["pdf", "csv"].map(downloadButton),
       ),
     );
   };
 
-  /* ---------- Pieces ---------- */
-
   /**
-   * The week at a glance (Nov 21, 2026): each day with the minutes placed out of its bell schedule's
-   * periods, grouped under its bell schedule (Monday – Thursday, Friday), so a different Friday shows.
-   * On phones a day opens that day.
+   * The schedule itself: Placing bar, Place next, minutes per day, the view switch and the views.
+   * @param {import("@/lib/schedule.js").Loading | null} next
+   * @param {boolean} isColored
    */
-  function weekStrip() {
-    const totals = dayTotals(plotter);
-    if (totals.every(({ planned }) => planned === 0)) return null;
-    const groups = /** @type {{ name: string, days: typeof totals }[]} */ ([]);
-    for (const total of totals) {
-      const name = total.pattern ?? "No class hours";
-      const last = groups[groups.length - 1];
-      if (last && last.name === name) last.days.push(total);
-      else groups.push({ name, days: [total] });
-    }
+  const schedule = (next, isColored) => {
+    const { patterns } = plotter;
+    if (patterns.length === 0) return null;
+    const placing = plotter.loading.find(({ id }) => id === ui.placingId);
+    const viewProps = { plotter, isColored, canEdit: plotter.can_edit, fitting: ui.fitting, onTap };
+    const pattern = patterns.find(({ id }) => id === ui.patternId) ?? patterns[0];
+    const tab = (/** @type {boolean} */ isOn, /** @type {string} */ label, /** @type {() => void} */ onClick, extra = "") =>
+      h("button", { type: "button", role: "tab", "aria-selected": String(isOn), class: `btn ${extra} ${isOn ? "bg-brand text-white" : "bg-surface"}`, onclick: onClick }, label);
+    const views = /** @type {const} */ ([["days", "Day cards"], ["grid", "Weekly grid"]]);
+
     return h(
       "div",
-      { class: "card flex flex-wrap gap-x-4 gap-y-2 p-3", "aria-label": "Minutes placed each day" },
-      groups.map((group) =>
-        h(
-          "div",
-          { class: "min-w-0" },
-          h("p", { class: "text-small font-medium uppercase tracking-wide text-muted-foreground" }, group.name),
-          h(
+      { class: "space-y-3", "data-schedule": "" },
+      placing
+        ? h(
             "div",
-            { class: "flex flex-wrap gap-1" },
-            group.days.map(({ day, planned, placed }) => {
-              const isFull = planned > 0 && placed >= planned;
-              return h(
-                "button",
-                {
-                  type: "button",
-                  class: `inline-flex min-h-11 flex-col items-start justify-center rounded-lg border px-2 text-left ${isFull ? "border-success/40 bg-success/5 text-success" : "bg-surface"} ${ui.day === day ? "max-md:portrait:ring-2 max-md:portrait:ring-brand" : ""}`,
-                  "aria-label": `${DAY_NAMES[day]}: ${placed} of ${planned} minutes placed`,
-                  onclick: () => { ui.day = day; draw(); },
-                },
-                h("span", { class: "text-small font-semibold" }, DAY_NAMES[day].slice(0, 3)),
-                h("span", { class: "text-small" }, planned ? `${placed} of ${planned} mins` : "No periods"),
-              );
-            }),
-          ),
-        ),
+            { role: "status", class: "sticky top-[5rem] z-20 flex items-center justify-between gap-2 rounded-lg border-2 border-brand bg-surface p-2 text-sm shadow" },
+            h("p", { class: "min-w-0" }, h("strong", null, `Placing ${placing.subject}. `), ui.fitting.size ? "Tap a lit period." : "No free period fits it right now."),
+            h("button", { type: "button", class: "btn btn-outline shrink-0", onclick: () => choosePlacing(null) }, icon("check"), "Done"),
+          )
+        : next
+          ? h("button", { type: "button", class: "btn btn-primary w-full sm:w-auto", onclick: () => choosePlacing(next.id) }, icon("plus"), `Place next: ${next.subject}`)
+          : null,
+      weekStrip(plotter, { day: ui.day, onDay: (day) => { ui.day = day; draw(); } }),
+      h(
+        "div",
+        { class: "flex flex-wrap items-center justify-between gap-2" },
+        h("div", { role: "tablist", "aria-label": "View", class: "grid w-full grid-cols-2 overflow-hidden rounded-lg border sm:w-80 max-md:portrait:hidden" }, views.map(([value, label]) => tab(ui.view === value, label, () => { ui.view = value; saveView(value); draw(); }, "rounded-none"))),
+        h("button", { type: "button", class: "btn btn-quiet", "aria-pressed": String(isColored), onclick: toggleColors }, icon("table"), isColored ? "Colors: on" : "Colors: off"),
       ),
+      h(
+        "div",
+        { class: "max-md:portrait:hidden" },
+        ui.view === "days"
+          ? dayCardsView(viewProps)
+          : h(
+              "div",
+              { class: "space-y-3" },
+              patterns.length > 1 ? h("div", { role: "tablist", "aria-label": "Bell schedule", class: "flex flex-wrap gap-2" }, patterns.map((item) => tab(item.id === pattern.id, item.name, () => { ui.patternId = item.id; draw(); }, `border ${item.id === pattern.id ? "border-brand" : ""}`))) : null,
+              gridView(viewProps, pattern),
+            ),
+      ),
+      h("div", { class: "hidden max-md:portrait:block" }, phoneDayView(viewProps, ui.day, (day) => { ui.day = day; draw(); })),
     );
-  }
+  };
+
+  /* ---------- Buttons ---------- */
 
   /**
-   * @param {"success" | "danger" | "info"} kind
-   * @param {import("@/lib/dom.js").Child} message
+   * A button that runs a task, showing it is busy meanwhile.
+   * @param {{ label: string, iconName: Parameters<typeof icon>[0], className: string, busyText: string, run: () => Promise<void>, keepBusy?: boolean }} props
+   *   keepBusy: stay busy after success (the page redraws anyway)
    */
-  function notice(kind, message) {
-    const styles = { success: "border-success/40 bg-success/5 text-success", danger: "border-danger/40 bg-danger/5 text-danger", info: "border-border bg-surface-muted text-foreground" };
-    return h("div", { role: kind === "danger" ? "alert" : "status", class: `rounded-lg border p-3 text-sm ${styles[kind]}` }, message);
-  }
-
-  /** The flags of the schedule, each with how to fix it (design audit, Must fix: plain words and a fix). */
-  function flagsPanel() {
-    if (plotter.patterns.length === 0 || plotter.loading.length === 0) return null;
-    if (plotter.flags.length === 0) return notice("success", "No flags. This schedule follows the rules so far.");
-    const red = plotter.flags.filter(({ severity }) => severity === "red").length;
-    return h(
-      "details",
-      { class: "card" },
-      h("summary", { class: "flex min-h-11 cursor-pointer items-center gap-2 p-3 text-sm" }, icon("warning", "size-4 text-warning"), h("span", { class: "font-medium" }, `${plotter.flags.length} ${plotter.flags.length === 1 ? "flag" : "flags"} to check`), red ? h("span", { class: "badge bg-red-100 text-red-900 dark:bg-red-900 dark:text-red-100" }, `${red} urgent`) : null),
-      h(
-        "ul",
-        { class: "space-y-2 p-3 pt-0" },
-        plotter.flags.map((flag) => {
-          const fix = FLAG_FIXES[flag.type];
-          return h(
-            "li",
-            { class: `rounded-lg p-2 text-sm ${flag.severity === "red" ? "bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100" : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100"}` },
-            h("p", null, flag.message, flag.acknowledged ? " (acknowledged)" : ""),
-            fix ? h("p", { class: "text-small" }, `How to fix: ${fix.text} `, fix.to ? h("a", { href: fix.to, class: "inline-flex min-h-11 items-center font-medium underline" }, `Open ${fix.label}`) : null) : null,
-            flag.section_subject_id && plotter.can_edit ? h("button", { type: "button", class: "btn btn-outline mt-1", onclick: () => choosePlacing(flag.section_subject_id ?? null) }, icon("pencil"), "Fix") : null,
-          );
-        }),
-      ),
-    );
-  }
-
-  /** @param {string} extension */
-  function downloadButton(extension) {
-    const button = /** @type {HTMLButtonElement} */ (
-      h(
-        "button",
-        {
-          type: "button",
-          class: "btn btn-quiet px-3",
-          onclick: async () => {
-            setBusy(button, true, "Preparing...");
-            try {
-              const name = await downloadFile(`/terms/${termId}/sections/${sectionId}/class-program.${extension}`);
-              toast.success(`${name} was downloaded.`);
-            } catch (error) {
-              toast.error(error);
-            } finally {
-              setBusy(button, false);
-            }
-          },
-        },
-        icon("download"),
-        extension.toUpperCase(),
-      )
-    );
+  const taskButton = ({ label, iconName, className, busyText, run, keepBusy = false }) => {
+    const button = /** @type {HTMLButtonElement} */ (h("button", { type: "button", class: `btn ${className}`, onclick: async () => {
+      setBusy(button, true, busyText);
+      try {
+        await run();
+        if (!keepBusy) setBusy(button, false);
+      } catch (error) {
+        toast.error(error);
+        setBusy(button, false);
+      }
+    } }, icon(iconName), label));
     return button;
-  }
+  };
 
-  function reviseButton() {
-    const button = /** @type {HTMLButtonElement} */ (
-      h(
-        "button",
-        {
-          type: "button",
-          class: "btn btn-primary",
-          onclick: async () => {
-            setBusy(button, true, "Opening...");
-            try {
-              ui.removed = await reviseSchedule(termId, sectionId);
-              toast.success("The schedule is open for changes again.");
-            } catch (error) {
-              toast.error(error);
-              setBusy(button, false);
-            }
-          },
-        },
-        icon("pencil"),
-        "Revise this schedule",
-      )
-    );
-    return button;
-  }
+  const downloadButton = (/** @type {string} */ extension) =>
+    taskButton({ label: extension.toUpperCase(), iconName: "download", className: "btn-quiet px-3", busyText: "Preparing...", run: async () => {
+      const name = await downloadFile(`/terms/${termId}/sections/${sectionId}/class-program.${extension}`);
+      toast.success(`${name} was downloaded.`);
+    } });
 
-  function clearButton() {
-    return h(
-      "button",
-      {
-        type: "button",
-        class: "btn btn-outline text-danger",
-        onclick: async () => {
-          const isSure = await confirmAction({
-            title: "Clear this schedule?",
-            message: `This removes all ${plotter.entries.length} classes of ${plotter.section.label} so you can start over. The teacher loading stays.`,
-            confirmLabel: "Yes, clear it",
-          });
-          if (!isSure) return;
-          try {
-            await clearSchedule(termId, sectionId);
-            toast.success(`The schedule of ${plotter.section.label} was cleared.`);
-          } catch (error) {
-            toast.error(error);
-          }
-        },
-      },
-      icon("eraser"),
-      "Clear this schedule",
-    );
-  }
+  const reviseButton = () =>
+    taskButton({ label: "Revise this schedule", iconName: "pencil", className: "btn-primary", busyText: "Opening...", keepBusy: true, run: async () => {
+      ui.removed = await reviseSchedule(termId, sectionId);
+      toast.success("The schedule is open for changes again.");
+    } });
+
+  const clearButton = () =>
+    h("button", { type: "button", class: "btn btn-outline text-danger", onclick: async () => {
+      const isSure = await confirmAction({
+        title: "Clear this schedule?",
+        message: `This removes all ${plotter.entries.length} classes of ${plotter.section.label} so you can start over. The teacher loading stays.`,
+        confirmLabel: "Yes, clear it",
+      });
+      if (!isSure) return;
+      try {
+        await clearSchedule(termId, sectionId);
+        toast.success(`The schedule of ${plotter.section.label} was cleared.`);
+      } catch (error) {
+        toast.error(error);
+      }
+    } }, icon("eraser"), "Clear this schedule");
 
   async function toggleColors() {
-    const next = !isColorCoding();
+    const isOn = !isColorCoding();
     try {
-      const { data } = /** @type {{ data: any }} */ (await api("/me/preferences", { method: "PUT", body: { color_coding: next } }));
+      const { data } = /** @type {{ data: any }} */ (await api("/me/preferences", { method: "PUT", body: { color_coding: isOn } }));
       session.user = data;
       draw();
-      toast.success(next ? "Subject colors are on." : "Subject colors are off.");
+      toast.success(isOn ? "Subject colors are on." : "Subject colors are off.");
     } catch (error) {
       toast.error(error);
     }
@@ -452,38 +264,39 @@ export async function render(container, { params }) {
    * @param {number} day
    */
   function onTap(slot, day) {
-    const entry = entryAt(plotter.entries, day, slot);
-    if (ui.placingId && !hasSubject(entry) && ui.fitting.has(`${slot.id}:${day}`)) {
-      placeQuickly(slot, day, ui.placingId);
+    const isTaken = hasSubject(entryAt(plotter.entries, day, slot));
+    if (ui.placingId && !isTaken && ui.fitting.has(`${slot.id}:${day}`)) {
+      placeOn(slot, day, ui.placingId, (other) => ui.fitting.has(`${slot.id}:${other}`));
       return;
     }
-    if (!plotter.can_edit && !hasSubject(entry)) return;
-    openClassDialog({ plotter, termId, target: { slot, day, loadingId: hasSubject(entry) ? undefined : ui.placingId ?? undefined } });
+    if (!plotter.can_edit && !isTaken) return;
+    openDialogAt({ slot, day, loadingId: isTaken ? undefined : ui.placingId ?? undefined });
   }
 
   /**
-   * Places a subject on a free period: JHS on every lit day of that period, SHS on the one day.
-   * A conflict opens the dialog to explain it and offer free rooms and teachers.
+   * Places a subject on a free period at once: Junior High on every day of that period's bell
+   * schedule that is free, Senior High on the one day. With no home room, or on a conflict, the
+   * dialog opens instead to ask or explain (with free rooms and teachers).
    * @param {TimeSlot} slot
    * @param {number} day
    * @param {number} loadingId
+   * @param {(day: number) => boolean} [isFree]  which days may take it (default: any day still empty)
    */
-  async function placeQuickly(slot, day, loadingId) {
+  async function placeOn(slot, day, loadingId, isFree = () => true) {
     const pattern = patternOfSlot(plotter.patterns, slot.id);
-    const roomId = entryAt(plotter.entries, day, slot)?.room_id ?? plotter.section.home_room_id;
     const item = plotter.loading.find(({ id }) => id === loadingId);
-    if (!pattern || !item) return;
-    if (!roomId) {
-      openClassDialog({ plotter, termId, target: { slot, day, loadingId } });
+    const roomId = entryAt(plotter.entries, day, slot)?.room_id ?? plotter.section.home_room_id;
+    if (!pattern || !item || !roomId) {
+      openDialogAt({ slot, day, loadingId });
       return;
     }
-    const days = (plotter.section.level === "JHS" ? pattern.days : [day]).filter((item2) => ui.fitting.has(`${slot.id}:${item2}`) && !hasSubject(entryAt(plotter.entries, item2, slot)));
+    const days = (plotter.section.level === "JHS" ? pattern.days : [day]).filter((other) => isFree(other) && !hasSubject(entryAt(plotter.entries, other, slot)));
     try {
       await assignSlot(termId, sectionId, { slotId: slot.id, section_subject_id: loadingId, room_id: roomId, days });
-      toast.success(`${item.subject} was placed on ${days.map((item2) => DAY_NAMES[item2]).join(", ")}.`);
+      toast.success(`${item.subject} was placed on ${days.map((other) => DAY_NAMES[other]).join(", ")}.`);
       if (ui.placingId) choosePlacing(ui.placingId);
     } catch (error) {
-      openClassDialog({ plotter, termId, target: { slot, day, loadingId, error } });
+      openDialogAt({ slot, day, loadingId, error });
     }
   }
 
@@ -494,37 +307,20 @@ export async function render(container, { params }) {
    */
   async function onDrop(dragged, target) {
     const [slotId, day] = target.split(":").map(Number);
-    const slot = plotter.patterns.flatMap(({ slots }) => slots).find(({ id }) => id === slotId);
+    const findSlot = (/** @type {number} */ id) => plotter.patterns.flatMap(({ slots }) => slots).find((slot) => slot.id === id);
+    const slot = findSlot(slotId);
     if (!slot || slot.is_break) return;
 
     if (dragged.startsWith("new:")) {
-      const loadingId = Number(dragged.slice(4));
-      if (hasSubject(entryAt(plotter.entries, day, slot))) {
-        openClassDialog({ plotter, termId, target: { slot, day } });
-        return;
-      }
-      const item = plotter.loading.find(({ id }) => id === loadingId);
-      const roomId = plotter.section.home_room_id;
-      const pattern = patternOfSlot(plotter.patterns, slot.id);
-      if (!item || !roomId || !pattern) {
-        openClassDialog({ plotter, termId, target: { slot, day, loadingId } });
-        return;
-      }
-      const days = (plotter.section.level === "JHS" ? pattern.days : [day]).filter((item2) => !hasSubject(entryAt(plotter.entries, item2, slot)));
-      try {
-        await assignSlot(termId, sectionId, { slotId: slot.id, section_subject_id: loadingId, room_id: roomId, days });
-        toast.success(`${item.subject} was placed.`);
-      } catch (error) {
-        openClassDialog({ plotter, termId, target: { slot, day, loadingId, error } });
-      }
+      if (hasSubject(entryAt(plotter.entries, day, slot))) openDialogAt({ slot, day });
+      else placeOn(slot, day, Number(dragged.slice(4)));
       return;
     }
 
     const [loadingId, fromSlotId, fromDay] = dragged.split(":").map(Number);
-    const fromSlot = plotter.patterns.flatMap(({ slots }) => slots).find(({ id }) => id === fromSlotId);
-    if (!fromSlot) return;
-    const plan = planMove({ loadingId, slot, day, from: { slot: fromSlot, day: fromDay } }, plotter.patterns, plotter.entries, plotter.section.level);
-    if (!plan) return;
+    const fromSlot = findSlot(fromSlotId);
+    const plan = fromSlot ? planMove({ loadingId, slot, day, from: { slot: fromSlot, day: fromDay } }, plotter.patterns, plotter.entries, plotter.section.level) : null;
+    if (!fromSlot || !plan) return;
     try {
       await moveEntry(termId, sectionId, { slotId: slot.id, from_slot_id: fromSlot.id, ...plan });
       toast.success("The class was moved.");

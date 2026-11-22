@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("qrcode", () => ({ default: { toString: async () => "<svg></svg>" } }));
 const { guestBlocks } = await import("./pages.js");
 
+/** @type {import("@/api/guest.js").GuestWeek} */
 const WEEK = {
   days: [1, 2, 3, 4, 5].map((day) => ({ day, name: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][day - 1] })),
   patterns: [{ name: "Monday – Thursday", days: [1, 2, 3, 4] }, { name: "Friday", days: [5] }],

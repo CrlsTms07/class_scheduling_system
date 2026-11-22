@@ -76,7 +76,7 @@ export async function render(container) {
       const tile = (/** @type {string} */ label, /** @type {number} */ value) => h("div", { class: "card p-4" }, h("p", { class: "text-small text-muted-foreground" }, label), h("p", { class: "text-2xl font-bold text-accent" }, String(value)));
       replace(
         content,
-        h("div", { class: "grid grid-cols-2 gap-3 lg:grid-cols-4" }, tile("Buildings", buildings.length), tile("Rooms", rooms.length), tile("In use", rooms.filter((/** @type {any} */ room) => room.is_active).length), tile("Seats (capacity)", rooms.reduce((sum, /** @type {any} */ room) => sum + (room.capacity ?? 0), 0))),
+        h("div", { class: "grid grid-cols-2 gap-3 lg:grid-cols-4" }, tile("Buildings", buildings.length), tile("Rooms", rooms.length), tile("In use", rooms.filter((/** @type {any} */ room) => room.is_active).length), tile("Seats (capacity)", rooms.reduce((/** @type {number} */ sum, /** @type {any} */ room) => sum + (room.capacity ?? 0), 0))),
         buildings.length === 0
           ? emptyState({ title: "No buildings yet", text: "Add your first building, then its rooms.", action: h("button", { type: "button", class: "btn btn-primary", onclick: () => buildingForm() }, icon("plus"), "Add building") })
           : buildings.map((/** @type {any} */ building) => {
