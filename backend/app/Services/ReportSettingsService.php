@@ -25,27 +25,39 @@ class ReportSettingsService
     {
         DB::transaction(function () use ($data, $admin) {
             $before = DB::table('school_profile')->first();
+            // The fixed details come from config/school.php the first time the row is made.
+            $fixed = $before ? [] : collect(\App\Support\SchoolProfile::FIXED)->mapWithKeys(fn ($field) => [$field => config("school.{$field}")])->all();
 
-            DB::table('school_profile')->updateOrInsert(['id' => 1], $data);
+            DB::table('school_profile')->updateOrInsert(['id' => 1], [...$fixed, ...$data]);
 
             $this->audit->log($admin, 'update', 'school_profile', 1, (array) $before, $data);
         });
     }
 
     /**
-     * The logos as embedded images, in printing order. The first one is the school's own.
+     * The logos as embedded images, in printing order. With none uploaded, the header has the DepEd
+     * seal and the footer the school's logo, as on the official forms (Nov 22, 2026).
      * The PDF library and the browser both read these directly.
      *
      * @return array<int, string>
      */
     public function logoDataUris(string $placement = 'header'): array
     {
-        return DB::table('school_logos')
+        $saved = DB::table('school_logos')
             ->where('placement', $placement)
             ->orderBy('id')
             ->get()
             ->map(fn ($logo) => "data:{$logo->mime_type};base64,{$logo->image_base64}")
             ->all();
+
+        // Both are built into the system, so no one has to upload them.
+        if ($saved !== []) {
+            return $saved;
+        }
+
+        return $placement === 'header'
+            ? [\App\Support\SchoolProfile::depedSealDataUri()]
+            : [\App\Support\SchoolProfile::logoDataUri()];
     }
 
     /** The campus photo on the landing page. Kept in the database, like the logos. */
@@ -151,6 +163,39 @@ class ReportSettingsService
     /**
      * @param  array<string, mixed>  $data
      */
+    /**
+     * The fixed signatories of one department's forms, for a term, in printing order (team
+     * decisions, Nov 21, 2026). They replace that department's block as a whole (and any older
+     * signatory kept for every department), so the block always matches the official form:
+     * Junior High: Prepared by, Conforme (the section's adviser), Recommending Approval, Approved by.
+     * Senior High: Prepared by, Noted by, Approved by.
+     *
+     * @param  array<string, mixed>  $data  level, and name and position per slot
+     */
+    public function saveSlots(SchoolTerm $term, array $data, User $admin): void
+    {
+        $level = $data['level'];
+        $rows = [];
+        foreach (\App\Http\Requests\SaveSignatorySlotsRequest::SLOTS[$level] as $key => $label) {
+            $rows[] = ['label' => $label, 'report_type' => null, 'auto_source' => null, 'name' => trim($data[$key]['name']), 'position' => trim($data[$key]['position'])];
+            if ($level === 'JHS' && $key === 'prepared_by') {
+                $rows[] = ['label' => 'Conforme', 'report_type' => 'class_program', 'auto_source' => 'section_adviser', 'name' => null, 'position' => 'Class Adviser'];
+            }
+        }
+
+        DB::transaction(function () use ($term, $level, $rows, $admin) {
+            $mine = fn () => DB::table('report_signatories')->where('term_id', $term->id)->where(fn ($query) => $query->where('level', $level)->orWhereNull('level'));
+            $before = $mine()->orderBy('sort_order')->get(['label', 'name', 'position', 'level'])->toArray();
+            $mine()->delete();
+
+            foreach ($rows as $index => $row) {
+                DB::table('report_signatories')->insert([...$row, 'level' => $level, 'term_id' => $term->id, 'sort_order' => $index + 1]);
+            }
+
+            $this->audit->log($admin, 'update', 'report_signatories', $term->id, ['signatories' => $before], ['level' => $level, 'signatories' => $rows]);
+        });
+    }
+
     public function addSignatory(SchoolTerm $term, array $data, User $admin): int
     {
         return DB::transaction(function () use ($term, $data, $admin) {

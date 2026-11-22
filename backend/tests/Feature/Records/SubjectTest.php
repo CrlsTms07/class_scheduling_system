@@ -34,6 +34,7 @@ function subjectBody(array $overrides = []): array
 {
     return [
         'grade_level_id' => subjectGrade(7),
+        'level' => 'JHS',
         'track_id' => null,
         'term_no' => null,
         'code' => null,
@@ -258,13 +259,84 @@ describe('once a subject has teacher loading', function () {
         expect(DB::table('subjects')->where('id', $this->subjectId)->value('name'))->toBe('Math');
     });
 
-    it('cannot be deleted', function () {
+    it('cannot be deleted without saying the loading goes too', function () {
         $this->deleteJson("/api/subjects/{$this->subjectId}")
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['subject' => 'not offered']);
+    });
+
+    it('is deleted with its loading when nothing is on a schedule (Nov 22, 2026)', function () {
+        $this->getJson("/api/school-years/{$this->yearId}/subjects")
+            ->assertJsonPath('data.0.loading_count', 1)
+            ->assertJsonPath('data.0.delete_blocked_reason', null);
+
+        $this->deleteJson("/api/subjects/{$this->subjectId}?with_loading=1")->assertOk();
+
+        expect(DB::table('subjects')->count())->toBe(0)
+            ->and(DB::table('section_subjects')->count())->toBe(0)
+            ->and(DB::table('audit_logs')->where('table_name', 'section_subjects')->where('action', 'delete')->count())->toBe(1);
+    });
+
+    it('stays once a class of it is on a schedule, even with the loading allowed to go', function () {
+        $loading = DB::table('section_subjects')->first();
+        DB::table('schedule_entries')->insert([
+            'term_id' => $loading->term_id, 'section_id' => $loading->section_id, 'section_subject_id' => $loading->id,
+            'teacher_id' => $loading->teacher_id, 'created_by' => $this->user->id ?? DB::table('users')->value('id'),
+            'day_of_week' => 1, 'start_time' => '07:00', 'end_time' => '07:45',
+        ]);
+
+        $this->getJson("/api/school-years/{$this->yearId}/subjects")->assertJsonPath('data.0.delete_blocked_reason', 'It is already on a schedule.');
+        $this->deleteJson("/api/subjects/{$this->subjectId}?with_loading=1")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['subject' => 'already on a schedule']);
+        expect(DB::table('subjects')->count())->toBe(1);
     });
 });
 
 it('lets a scheduler add a track for their subjects', function () {
     $this->postJson('/api/tracks', ['name' => 'TechPro'])->assertCreated();
+});
+
+describe('name only (beneficiary review, Nov 21, 2026)', function () {
+    it('adds a subject with no grade and no minutes, for every grade', function () {
+        $body = subjectBody(['name' => 'Filipino']);
+        unset($body['grade_level_id'], $body['minutes_per_week']);
+
+        $id = $this->postJson("/api/school-years/{$this->yearId}/subjects", $body)->assertCreated()->json('data.id');
+
+        $subject = DB::table('subjects')->find($id);
+        expect($subject->grade_level_id)->toBeNull()
+            ->and($subject->minutes_per_week)->toBeNull();
+
+        // It is a Junior High subject (the Chairperson's level): the Master Teacher neither sees
+        // nor changes it (Nov 21, 2026), but may have a Senior High "Filipino" of their own.
+        expect($subject->level)->toBe('JHS');
+        $master = User::factory()->create()->assignRole('master_teacher');
+        $master->gradeLevels()->sync([subjectGrade(11)]);
+        $this->actingAs($master);
+        expect(collect($this->getJson("/api/school-years/{$this->yearId}/subjects")->json('data'))->pluck('name'))->not->toContain('Filipino');
+        $this->putJson("/api/subjects/{$id}", [...$body, 'code' => 'FIL'])->assertForbidden();
+        $this->postJson("/api/school-years/{$this->yearId}/subjects", $body)->assertCreated();
+        expect(DB::table('subjects')->where('name', 'Filipino')->pluck('level')->sort()->values()->all())->toBe(['JHS', 'SHS']);
+    });
+
+    it('refuses the same name twice in any letter case', function () {
+        $body = subjectBody(['name' => 'Filipino']);
+        unset($body['grade_level_id'], $body['minutes_per_week']);
+        $this->postJson("/api/school-years/{$this->yearId}/subjects", $body)->assertCreated();
+
+        $this->postJson("/api/school-years/{$this->yearId}/subjects", [...$body, 'name' => 'FILIPINO'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['name' => 'This subject is already in the list']);
+    });
+
+    it('keeps an older subject\'s grade when it is saved without one', function () {
+        $id = insertSubject($this, ['name' => 'Math 7']);
+        $body = subjectBody(['name' => 'Math 7', 'code' => 'M7']);
+        unset($body['grade_level_id'], $body['minutes_per_week']);
+
+        $this->putJson("/api/subjects/{$id}", $body)->assertOk();
+
+        expect(DB::table('subjects')->where('id', $id)->value('grade_level_id'))->toBe(subjectGrade(7));
+    });
 });

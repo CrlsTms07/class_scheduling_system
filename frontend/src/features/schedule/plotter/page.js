@@ -18,7 +18,7 @@ import { assignSlot, clearSchedule, conflictDetailsOf, getFreePeriods, getPlotte
 import { watch } from "@/state/cache.js";
 import { isColorCoding, session } from "@/state/session.js";
 import { termState } from "@/state/term.js";
-import { DAY_NAMES, FLAG_FIXES, STATUS_COLORS, STATUS_LABELS, entryAt, fittingPeriods, hasSubject, minutesText, patternOfSlot, planMove, subjectColor } from "@/lib/schedule.js";
+import { DAY_NAMES, FLAG_FIXES, STATUS_COLORS, STATUS_LABELS, dayTotals, entryAt, fittingPeriods, hasSubject, isComplete, nextSubject, patternOfSlot, planMove, progressPercent, progressText, subjectColor } from "@/lib/schedule.js";
 import { openClassDialog } from "./class-dialog.js";
 import { openSubmitDialog } from "./submit-dialog.js";
 import { dayCardsView, gridView, phoneDayView, readView, saveView } from "./schedule-views.js";
@@ -61,7 +61,10 @@ export async function render(container, { params }) {
     const isColored = isColorCoding();
     const placing = loading.find(({ id }) => id === ui.placingId);
     const viewProps = { plotter, isColored, canEdit, fitting: ui.fitting, onTap };
-    const completeCount = loading.filter((item) => item.scheduled_minutes === item.required_minutes).length;
+    // Complete: on all the days of its MATATAG target (Junior High), or at least once when it has none.
+    const completeCount = loading.filter(isComplete).length;
+    // One clear way to plot (Nov 21, 2026): the first subject not complete is marked Next.
+    const next = canEdit ? nextSubject(loading) : null;
 
     const header = h(
       "div",
@@ -112,13 +115,13 @@ export async function render(container, { params }) {
 
     const setup =
       loading.length === 0
-        ? notice("info", h("span", null, "This section has no subjects with teachers yet. ", h("a", { href: "/teacher-loading", class: "inline-flex min-h-11 items-center font-medium text-brand underline" }, "Open Teacher Loading"), " to add them first."))
+        ? notice("info", h("span", null, "This section has no subjects with teachers yet. ", h("a", { href: `/teacher-loading?section=${sectionId}`, class: "inline-flex min-h-11 items-center font-medium text-brand underline" }, "Open Teacher Loading"), " to add them first."))
         : patterns.length === 0
           ? h(
               "div",
               { class: "card space-y-2 p-4" },
-              h("p", { class: "text-sm" }, "There is no bell schedule for this section's department and shift yet. Add a class by typing its time, and the bell schedule starts from it, or set it up on the Time Slots page."),
-              h("div", { class: "flex flex-wrap gap-2" }, canEdit ? h("button", { type: "button", class: "btn btn-primary", onclick: () => openClassDialog({ plotter, termId, target: { day: 1 } }) }, icon("plus"), "Add a class by time") : null, h("a", { href: "/time-slots", class: "btn btn-outline" }, icon("clock"), "Open Time Slots")),
+              h("p", { class: "text-sm" }, "This section has no class times yet. Add its first class by choosing the start and end time; the class hours are made from it."),
+              h("div", { class: "flex flex-wrap gap-2" }, canEdit ? h("button", { type: "button", class: "btn btn-primary", onclick: () => openClassDialog({ plotter, termId, target: { day: 1 } }) }, icon("plus"), "Add a class by time") : null, h("a", { href: "/time-slots", class: "btn btn-outline" }, icon("clock"), "Class Hours (optional)")),
             )
           : null;
 
@@ -129,20 +132,22 @@ export async function render(container, { params }) {
           h(
             "summary",
             { class: "flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 p-3 font-medium" },
-            h("span", null, `Subjects · ${completeCount} of ${loading.length} complete`),
+            h("span", null, `Subjects · ${completeCount} of ${loading.length} placed`),
             icon("chevron-down", "size-4 transition group-open:rotate-180"),
           ),
           h(
             "div",
             { class: "space-y-2 p-3 pt-0" },
-            canEdit ? h("p", { class: "field-help" }, "Tap a subject, then tap a lit period to place it. You can also drag a subject onto a period.") : null,
+            canEdit ? h("p", { class: "field-help" }, next ? "Start with the subject marked Next: tap it, then tap a lit period. When it is complete, the next one is chosen for you." : "Every subject is complete. Check the flags, then submit for approval.") : null,
             h(
               "ul",
               { class: "space-y-2" },
               loading.map((item) => {
                 const isOn = ui.placingId === item.id;
                 const subjectFlags = flags.filter((flag) => flag.section_subject_id === item.id);
-                const progress = Math.min(100, Math.round((item.scheduled_minutes / Math.max(1, item.required_minutes)) * 100));
+                const progress = progressPercent(item);
+                const isDone = isComplete(item);
+                const isNext = next?.id === item.id;
                 return h(
                   "li",
                   null,
@@ -153,12 +158,17 @@ export async function render(container, { params }) {
                       "aria-pressed": String(isOn),
                       disabled: !canEdit,
                       "data-drag": canEdit ? `new:${item.id}` : null,
-                      class: `w-full rounded-lg border p-2 text-left text-sm ${subjectColor(item.id, isColored)} ${isOn ? "ring-2 ring-brand" : ""}`,
+                      class: `w-full rounded-lg border p-2 text-left text-sm ${subjectColor(item.id, isColored)} ${isOn ? "ring-2 ring-brand" : isNext ? "ring-2 ring-brand/40" : ""}`,
                       onclick: () => choosePlacing(isOn ? null : item.id),
                     },
-                    h("span", { class: "flex items-start justify-between gap-2" }, h("span", { class: "font-medium" }, item.subject), item.is_priority ? h("span", { class: "badge bg-surface text-foreground" }, "Priority") : null),
+                    h(
+                      "span",
+                      { class: "flex items-start justify-between gap-2" },
+                      h("span", { class: "flex items-center gap-1 font-medium" }, isDone ? icon("check", "size-4 shrink-0") : null, item.subject),
+                      h("span", { class: "flex shrink-0 gap-1" }, isNext ? h("span", { class: "badge bg-brand text-white" }, "Next") : null, item.is_priority ? h("span", { class: "badge bg-surface text-foreground" }, "Priority") : null),
+                    ),
                     h("span", { class: "block text-small opacity-90" }, item.teacher),
-                    h("span", { class: "block text-small opacity-90" }, minutesText(item)),
+                    h("span", { class: "block text-small opacity-90" }, progressText(item)),
                     h("span", { class: "mt-1 block h-1.5 overflow-hidden rounded-full bg-black/10" }, h("span", { class: "block h-full bg-current opacity-60", style: { width: `${progress}%` } })),
                     subjectFlags.length ? h("span", { class: "mt-1 flex items-center gap-1 text-small font-medium text-danger" }, icon("warning"), subjectFlags[0].message) : null,
                   ),
@@ -204,6 +214,10 @@ export async function render(container, { params }) {
                   h("button", { type: "button", class: "btn btn-outline shrink-0", onclick: () => choosePlacing(null) }, icon("check"), "Done"),
                 )
               : null,
+            next && !placing
+              ? h("button", { type: "button", class: "btn btn-primary w-full sm:w-auto", onclick: () => choosePlacing(next.id) }, icon("plus"), `Place next: ${next.subject}`)
+              : null,
+            weekStrip(),
             h(
               "div",
               { class: "flex flex-wrap items-center justify-between gap-2" },
@@ -236,6 +250,52 @@ export async function render(container, { params }) {
   };
 
   /* ---------- Pieces ---------- */
+
+  /**
+   * The week at a glance (Nov 21, 2026): each day with the minutes placed out of its bell schedule's
+   * periods, grouped under its bell schedule (Monday – Thursday, Friday), so a different Friday shows.
+   * On phones a day opens that day.
+   */
+  function weekStrip() {
+    const totals = dayTotals(plotter);
+    if (totals.every(({ planned }) => planned === 0)) return null;
+    const groups = /** @type {{ name: string, days: typeof totals }[]} */ ([]);
+    for (const total of totals) {
+      const name = total.pattern ?? "No class hours";
+      const last = groups[groups.length - 1];
+      if (last && last.name === name) last.days.push(total);
+      else groups.push({ name, days: [total] });
+    }
+    return h(
+      "div",
+      { class: "card flex flex-wrap gap-x-4 gap-y-2 p-3", "aria-label": "Minutes placed each day" },
+      groups.map((group) =>
+        h(
+          "div",
+          { class: "min-w-0" },
+          h("p", { class: "text-small font-medium uppercase tracking-wide text-muted-foreground" }, group.name),
+          h(
+            "div",
+            { class: "flex flex-wrap gap-1" },
+            group.days.map(({ day, planned, placed }) => {
+              const isFull = planned > 0 && placed >= planned;
+              return h(
+                "button",
+                {
+                  type: "button",
+                  class: `inline-flex min-h-11 flex-col items-start justify-center rounded-lg border px-2 text-left ${isFull ? "border-success/40 bg-success/5 text-success" : "bg-surface"} ${ui.day === day ? "max-md:portrait:ring-2 max-md:portrait:ring-brand" : ""}`,
+                  "aria-label": `${DAY_NAMES[day]}: ${placed} of ${planned} minutes placed`,
+                  onclick: () => { ui.day = day; draw(); },
+                },
+                h("span", { class: "text-small font-semibold" }, DAY_NAMES[day].slice(0, 3)),
+                h("span", { class: "text-small" }, planned ? `${placed} of ${planned} mins` : "No periods"),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  }
 
   /**
    * @param {"success" | "danger" | "info"} kind
@@ -478,8 +538,17 @@ export async function render(container, { params }) {
 
   const stopWatching = watch(plotterKey(termId, sectionId), async () => {
     try {
+      const before = plotter.loading.find(({ id }) => id === ui.placingId);
       plotter = await getPlotter(termId, sectionId);
-      if (ui.placingId && !plotter.loading.some(({ id }) => id === ui.placingId)) ui.placingId = null;
+      const after = plotter.loading.find(({ id }) => id === ui.placingId);
+      if (ui.placingId && !after) ui.placingId = null;
+      // The subject being placed just became complete: go on to the next one by itself.
+      if (before && after && !isComplete(before) && isComplete(after) && plotter.can_edit) {
+        const upNext = nextSubject(plotter.loading);
+        toast.success(upNext ? `${after.subject} is complete. Next: ${upNext.subject}.` : `${after.subject} is complete. Every subject is placed.`);
+        choosePlacing(upNext?.id ?? null);
+        return;
+      }
       draw();
     } catch (error) {
       toast.error(error);

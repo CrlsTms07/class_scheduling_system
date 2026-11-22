@@ -276,5 +276,29 @@ describe("forms check each field while it is filled in", () => {
     input.dispatchEvent(new Event("input"));
     expect(dialog.textContent).not.toContain("A room holds at most 60 seats.");
   });
+
+  it("asks for a field only when another one needs it (a Senior High section's strand), with no (optional) mark", async () => {
+    const onSubmit = vi.fn(async () => "Saved.");
+    openFormDialog({
+      title: "Add a section",
+      fields: [
+        { name: "level", label: "Level" },
+        { name: "strand", label: "Strand", requiredWhen: (values) => values.level === "SHS" },
+      ],
+      submitLabel: "Add section",
+      onSubmit,
+    });
+    const dialog = [...document.querySelectorAll("dialog")].at(-1);
+    const [level, strand] = dialog.querySelectorAll("input");
+    expect(dialog.querySelector(`label[for="${strand.id}"]`).textContent).toBe("Strand");
+    type(level, "SHS");
+    [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Add section").click();
+    await Promise.resolve();
+    expect(dialog.textContent).toContain("Strand is required");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    type(level, "JHS");
+    expect(dialog.textContent).not.toContain("Strand is required");
+  });
 });
 

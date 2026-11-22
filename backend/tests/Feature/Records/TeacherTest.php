@@ -23,6 +23,7 @@ beforeEach(function () {
     ]);
     $this->teacherId = DB::table('teachers')->insertGetId(['first_name' => 'Ana', 'last_name' => 'Reyes']);
     $this->taskId = DB::table('teaching_tasks')->insertGetId(['name' => 'ICT Coordinator']);
+    $this->departmentId = DB::table('departments')->insertGetId(['name' => 'Mathematics']);
 });
 
 function teacherBody(array $overrides = []): array
@@ -33,9 +34,8 @@ function teacherBody(array $overrides = []): array
         'middle_name' => null,
         'last_name' => 'Cruz',
         'suffix' => null,
-        'display_name' => null,
-        'department_id' => null,
-        'designation_id' => null,
+        'department_id' => DB::table('departments')->value('id'),
+        'designation_id' => DB::table('designations')->value('id'),
         'shift' => 'WHOLE_DAY',
         'max_subjects' => 5,
         'is_active' => true,
@@ -72,7 +72,7 @@ it('lets the Admin manage too, since sections need advisers', function () {
 
     $this->getJson("/api/terms/{$this->termId}/teachers")->assertOk();
     $this->postJson("/api/terms/{$this->termId}/teachers", teacherBody())->assertCreated();
-    $this->postJson('/api/personnel-options/departments', ['name' => 'Math'])->assertCreated();
+    $this->postJson('/api/personnel-options/departments', ['name' => 'Math', 'level' => 'JHS'])->assertCreated();
 });
 
 it('keeps people with only a teacher role out completely', function () {
@@ -83,7 +83,7 @@ it('keeps people with only a teacher role out completely', function () {
     $this->postJson("/api/terms/{$this->termId}/teachers", teacherBody())->assertForbidden();
     $this->putJson("/api/terms/{$this->termId}/teachers/{$this->teacherId}", teacherBody())->assertForbidden();
     $this->deleteJson("/api/teachers/{$this->teacherId}")->assertForbidden();
-    $this->postJson('/api/personnel-options/departments', ['name' => 'Math'])->assertForbidden();
+    $this->postJson('/api/personnel-options/departments', ['name' => 'Math', 'level' => 'JHS'])->assertForbidden();
 });
 
 it('adds a record with no login account, and writes an audit log', function () {
@@ -98,44 +98,47 @@ it('adds a record with no login account, and writes an audit log', function () {
     expect(DB::table('audit_logs')->where('table_name', 'teachers')->where('action', 'create')->exists())->toBeTrue();
 });
 
-it('prints the display name, then first name, middle initial and last name', function () {
+it('prints first name, middle initial and last name, made by the code', function () {
     DB::table('teachers')->where('id', $this->teacherId)->update(['display_name' => 'A. T. Reyes']);
     DB::table('teachers')->insert(['first_name' => 'Ben', 'middle_name' => 'Santos', 'last_name' => 'Cruz']);
 
     $this->getJson("/api/terms/{$this->termId}/teachers")
         ->assertJsonPath('data.0.printed_name', 'Ben S. Cruz')
-        ->assertJsonPath('data.1.printed_name', 'A. T. Reyes');
+        ->assertJsonPath('data.1.printed_name', 'Ana Reyes');
 });
 
-it('saves department, designation and qualifications', function () {
-    $departmentId = $this->postJson('/api/personnel-options/departments', ['name' => 'Math'])->assertCreated()->json('data.id');
-    $designationId = $this->postJson('/api/personnel-options/designations', ['name' => 'Teacher I'])->assertCreated()->json('data.id');
+it('needs the department of every teacher', function () {
+    $this->postJson("/api/terms/{$this->termId}/teachers", teacherBody(['department_id' => null]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['department_id' => 'Choose the department. Every teacher belongs to one.']);
+});
 
-    $this->postJson("/api/terms/{$this->termId}/teachers", teacherBody([
-        'department_id' => $departmentId,
-        'designation_id' => $designationId,
-        'qualifications' => [
-            ['degree_level' => 'Bachelor', 'degree' => 'BSEd', 'major' => 'Math', 'school' => 'CvSU', 'year_completed' => 2015],
-            ['degree_level' => 'Master', 'degree' => 'MAEd'],
-        ],
-    ]))->assertCreated();
+it('saves department and designation, which are required', function () {
+    $departmentId = $this->postJson('/api/personnel-options/departments', ['name' => 'Math', 'level' => 'JHS'])->assertCreated()->json('data.id');
+    $designationId = DB::table('designations')->where('name', 'Teacher I')->value('id');
+
+    $this->postJson("/api/terms/{$this->termId}/teachers", teacherBody(['department_id' => $departmentId, 'designation_id' => $designationId]))->assertCreated();
 
     $this->getJson("/api/terms/{$this->termId}/teachers")
         ->assertJsonPath('data.0.department', 'Math')
-        ->assertJsonPath('data.0.designation', 'Teacher I')
-        ->assertJsonCount(2, 'data.0.qualifications')
-        ->assertJsonPath('data.0.qualifications.0.major', 'Math')
-        ->assertJsonPath('data.0.qualifications.1.degree', 'MAEd');
+        ->assertJsonPath('data.0.designation', 'Teacher I');
+
+    $this->postJson("/api/terms/{$this->termId}/teachers", teacherBody(['designation_id' => null]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['designation_id' => 'Choose the designation']);
 });
 
-it('replaces qualifications when saved again', function () {
-    $body = teacherBody(['first_name' => 'Ana', 'last_name' => 'Reyes']);
-    $url = "/api/terms/{$this->termId}/teachers/{$this->teacherId}";
+it('renames a department in place, and refuses a name already in the list', function () {
+    $math = $this->postJson('/api/personnel-options/departments', ['name' => 'Filipno', 'level' => 'JHS'])->assertCreated()->json('data.id');
+    $this->postJson('/api/personnel-options/departments', ['name' => 'Science', 'level' => 'JHS'])->assertCreated();
 
-    $this->putJson($url, [...$body, 'qualifications' => [['degree_level' => 'Bachelor', 'degree' => 'BSEd']]])->assertOk();
-    $this->putJson($url, [...$body, 'qualifications' => [['degree_level' => 'Master', 'degree' => 'MAEd']]])->assertOk();
+    $this->putJson("/api/personnel-options/departments/{$math}", ['name' => 'Filipino'])->assertOk()->assertJsonPath('data.name', 'Filipino');
+    $this->putJson("/api/personnel-options/departments/{$math}", ['name' => 'filipino'])->assertOk();
+    $this->putJson("/api/personnel-options/departments/{$math}", ['name' => 'science'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['name' => 'This already exists in the list.']);
 
-    expect(DB::table('teacher_qualifications')->where('teacher_id', $this->teacherId)->pluck('degree')->all())->toBe(['MAEd']);
+    expect(DB::table('departments')->where('id', $math)->value('name'))->toBe('filipino');
 });
 
 it('keeps teaching tasks per term', function () {
@@ -158,12 +161,10 @@ it('rejects bad records', function (array $overrides, string $field) {
 })->with([
     'no first name' => [['first_name' => ''], 'first_name'],
     'no last name' => [['last_name' => ''], 'last_name'],
-    'unknown type' => [['personnel_type' => 'guest'], 'personnel_type'],
+    'no designation' => [['designation_id' => null], 'designation_id'],
     'unknown shift' => [['shift' => 'NIGHT'], 'shift'],
     'unknown department' => [['department_id' => 999], 'department_id'],
     'unknown task' => [['task_ids' => [999]], 'task_ids.0'],
-    'qualification without a degree' => [['qualifications' => [['degree_level' => 'Bachelor', 'degree' => '']]], 'qualifications.0.degree'],
-    'impossible year' => [['qualifications' => [['degree_level' => 'Bachelor', 'degree' => 'BSEd', 'year_completed' => 1800]]], 'qualifications.0.year_completed'],
 ]);
 
 it('refuses a repeated option', function () {
@@ -214,20 +215,14 @@ it('refuses to delete a record in use, and says why', function (callable $setUp,
     'loading' => [fn ($test) => teacherLoading($test), 'teacher loading'],
 ]);
 
-it('keeps someone with an advisory or loading as teaching personnel', function () {
-    teacherLoading($this);
-
-    $this->putJson("/api/terms/{$this->termId}/teachers/{$this->teacherId}", teacherBody([
-        'first_name' => 'Ana', 'last_name' => 'Reyes', 'personnel_type' => 'non_teaching',
-    ]))
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors(['personnel_type' => 'must stay']);
-});
-
-it('lets someone with no work become non-teaching', function () {
+it('keeps only teaching personnel: non-teaching staff are out of scope (Nov 21, 2026)', function () {
     $this->putJson("/api/terms/{$this->termId}/teachers/{$this->teacherId}", teacherBody([
         'first_name' => 'Ana', 'last_name' => 'Reyes', 'personnel_type' => 'non_teaching',
     ]))->assertOk();
+    DB::table('teachers')->insert(['first_name' => 'Staff', 'last_name' => 'Only', 'personnel_type' => 'non_teaching']);
+
+    expect(DB::table('teachers')->where('id', $this->teacherId)->value('personnel_type'))->toBe('teaching')
+        ->and(collect($this->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->pluck('last_name')->all())->toBe(['Reyes']);
 });
 
 it('offers only teaching, active people as advisers on the Sections form', function () {
@@ -246,7 +241,7 @@ it('gives every teacher the same load limit, whatever is sent (team decision, No
 });
 
 it('refuses list names that do not read like a name, or are already there in other letters', function () {
-    $this->postJson('/api/personnel-options/departments', ['name' => 'vffxfszv'])
+    $this->postJson('/api/personnel-options/departments', ['name' => 'vffxfszv', 'level' => 'JHS'])
         ->assertUnprocessable()->assertJsonPath('errors.name.0', 'This does not look like a name (it has no vowel). Check the spelling, or type a short form in capitals, like SSG.');
     $this->postJson('/api/personnel-options/teaching-tasks', ['name' => 'Saaaaa'])->assertUnprocessable();
     $this->postJson('/api/personnel-options/designations', ['name' => 'Teacher #1'])->assertUnprocessable();
@@ -262,3 +257,58 @@ it('refuses a track name typed at random or already there in other letters', fun
     $this->postJson('/api/tracks', ['name' => 'TechPro'])->assertCreated();
     $this->postJson('/api/tracks', ['name' => 'techpro'])->assertUnprocessable()->assertJsonPath('errors.name.0', 'This track already exists.');
 });
+
+describe('departments of each level (Nov 21, 2026)', function () {
+    beforeEach(function () {
+        $this->mathJhs = DB::table('departments')->insertGetId(['name' => 'Department of Mathematics', 'level' => 'JHS']);
+        $this->tvl = DB::table('departments')->insertGetId(['name' => 'TVL', 'level' => 'SHS']);
+        DB::table('teachers')->insert([
+            ['first_name' => 'Junior', 'last_name' => 'Teacher', 'department_id' => $this->mathJhs],
+            ['first_name' => 'Senior', 'last_name' => 'Teacher', 'department_id' => $this->tvl],
+        ]);
+        $this->master = User::factory()->create()->assignRole('master_teacher');
+        $this->master->gradeLevels()->sync([DB::table('grade_levels')->where('grade', 11)->value('id')]);
+    });
+
+    it('shows the Master Teacher only Senior High departments, and every teacher with only Senior High ones to edit', function () {
+        $this->actingAs($this->master);
+        $teachers = collect($this->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->keyBy('first_name');
+
+        expect(collect($this->getJson('/api/personnel-options')->json('data.departments'))->pluck('name')->all())->not->toContain('Department of Mathematics')
+            ->and($teachers['Senior']['home_level'])->toBe('SHS')
+            ->and($teachers['Senior']['can_edit'])->toBeTrue()
+            ->and($teachers['Junior']['home_level'])->toBe('JHS')
+            ->and($teachers['Junior']['can_edit'])->toBeFalse();
+
+        $junior = DB::table('teachers')->where('first_name', 'Junior')->value('id');
+        $this->deleteJson("/api/teachers/{$junior}")
+            ->assertForbidden()
+            ->assertJsonPath('message', 'This teacher belongs to the other level (Junior High or Senior High). Only their own Chairperson or Master Teacher, or the Admin, can change this record.');
+    });
+
+    it('lets a Chairperson edit Junior High teachers but only view Senior High ones', function () {
+        $glc = User::factory()->create()->assignRole('glc');
+        $glc->gradeLevels()->sync([DB::table('grade_levels')->where('grade', 7)->value('id')]);
+        $teachers = collect($this->actingAs($glc)->getJson("/api/terms/{$this->termId}/teachers")->json('data'))->keyBy('first_name');
+
+        expect($teachers['Junior']['can_edit'])->toBeTrue()
+            ->and($teachers['Senior']['can_edit'])->toBeFalse();
+    });
+
+    it('adds a department to the own level of the Master Teacher, and lets the same name live in each level', function () {
+        $this->actingAs($this->master);
+
+        $this->postJson('/api/personnel-options/departments', ['name' => 'Department of Mathematics'])->assertCreated()->assertJsonPath('data.level', 'SHS');
+        $this->putJson("/api/personnel-options/departments/{$this->mathJhs}", ['name' => 'Math'])->assertForbidden();
+    });
+
+    it('asks the Admin to choose the level of a new department', function () {
+        $this->actingAs(User::factory()->create()->assignRole('super_admin'));
+
+        $this->postJson('/api/personnel-options/departments', ['name' => 'Science'])
+            ->assertUnprocessable()->assertJsonValidationErrors(['level' => 'Choose Junior High or Senior High first.']);
+        $this->postJson('/api/personnel-options/departments', ['name' => 'Science', 'level' => 'SHS'])->assertCreated();
+        $this->postJson('/api/personnel-options/departments', ['name' => 'science', 'level' => 'SHS'])->assertUnprocessable();
+    });
+});
+

@@ -3,6 +3,7 @@
  * My Schedule (approved classes only, PDF and CSV) and My Profile, for teachers and for a
  * Chairperson or Master Teacher with a personnel record.
  */
+import { SHIFT_LABELS } from "@/lib/shifts.js";
 import { h, replace } from "@/lib/dom.js";
 import { icon } from "@/components/icons.js";
 import { downloadButtons } from "@/components/download-buttons.js";
@@ -56,7 +57,7 @@ export async function renderMyProfile(container) {
   replace(container, skeletonPage());
   try {
     const profile = await getMyProfile(term.id);
-    const shifts = { AM: "Morning (AM)", PM: "Afternoon (PM)", WHOLE_DAY: "Whole day" };
+    const shifts = SHIFT_LABELS;
     const row = (/** @type {string} */ label, /** @type {string | null | undefined} */ value) => [h("dt", { class: "text-sm text-muted-foreground" }, label), h("dd", { class: "text-sm font-medium sm:col-span-2" }, value || "–")];
     replace(
       container,
@@ -72,7 +73,6 @@ export async function renderMyProfile(container) {
                 row("Shift", shifts[/** @type {keyof typeof shifts} */ (profile.shift)]), row("Subjects", `${profile.assigned} of ${profile.max_subjects} this ${term.school_year.term_label.toLowerCase()}`), row("Advisory", profile.advisory),
                 row("Tasks", profile.tasks.join(", ")),
               ),
-              h("section", { class: "space-y-2" }, h("h2", { class: "font-semibold text-accent" }, "Education"), profile.qualifications.length === 0 ? h("p", { class: "text-sm text-muted-foreground" }, "No qualifications recorded yet.") : h("ul", { class: "card divide-y" }, profile.qualifications.map((/** @type {any} */ item) => h("li", { class: "p-3 text-sm" }, h("p", { class: "font-medium" }, [item.degree_level, item.degree].filter(Boolean).join(": ")), h("p", { class: "text-small text-muted-foreground" }, [item.major, item.school, item.year_completed].filter(Boolean).join(" · ")))))),
               h("a", { href: "/my-schedule", class: "btn btn-outline" }, icon("calendar-check"), "Open My Schedule"),
             ],
       ),

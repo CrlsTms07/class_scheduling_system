@@ -15,6 +15,10 @@
     <div class="title">
         <div>{{ $title }}</div>
         <div>{{ $term->name }}, School Year {{ $term->schoolYear->name }}</div>
+        @if ($section->track)
+            {{-- Track and strand, like "ACADEMIC - Arts, Social Science and Humanities" --}}
+            <div>{{ mb_strtoupper($section->track->name) }}@if ($section->strand) - {{ $section->strand }}@endif</div>
+        @endif
         <div>{{ mb_strtoupper($section->name) }}</div>
         <div>Class Adviser: <span class="adviser">{{ $adviser ?? '' }}</span></div>
         @if ($coAdviser ?? null)
@@ -34,6 +38,9 @@
         </thead>
         <tbody>
             @foreach ($weekly['rows'] as $row)
+                @if ($row['async_banner'] ?? false)
+                    <tr><td class="break" colspan="{{ 2 + count($weekly['days']) }}">ASYNCHRONOUS SESSION</td></tr>
+                @endif
                 <tr>
                     <td>{{ $row['time'] }}</td>
                     <td>{{ $row['minutes'] }}</td>

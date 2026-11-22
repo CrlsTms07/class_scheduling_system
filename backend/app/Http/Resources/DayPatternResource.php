@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Services\TimeSlotService;
 use App\Support\ScheduleFormat;
+use App\Support\ShiftHours;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -23,6 +24,8 @@ class DayPatternResource extends JsonResource
             'name' => $this->name,
             'days' => $this->day_numbers,
             'locked_reason' => $service->whyLocked($this->resource),
+            // The hours this shift may use, for the checks while typing (null: no limit).
+            'shift_window' => ShiftHours::window($this->level, $this->shift),
             'slots' => $this->timeSlots->map(fn ($slot) => [
                 'id' => $slot->id,
                 'period_no' => $slot->period_no,
@@ -31,6 +34,7 @@ class DayPatternResource extends JsonResource
                 'end_time' => ScheduleFormat::shortTime($slot->end_time),
                 'minutes' => ScheduleFormat::minutesBetween($slot->start_time, $slot->end_time),
                 'is_break' => $slot->is_break,
+                    'is_async' => (bool) $slot->is_async,
                 'locked_reason' => $service->whySlotLocked($slot),
                 // What deleting it would take with it, or why it cannot be deleted.
                 'in_use' => $service->classesInSlot($slot),

@@ -142,3 +142,13 @@ describe("time slots are checked while choosing (no waiting for Save)", () => {
   });
 });
 
+describe("class hours: time that is neither a period nor a break", () => {
+  it("is found between rows, so it is not missed", async () => {
+    const { gapsBetween } = await import("@/features/setup/time-slots.js");
+    expect(gapsBetween([
+      { start_time: "06:30", end_time: "07:15", is_break: false },
+      { start_time: "07:45", end_time: "08:30", is_break: false },
+      { start_time: "08:30", end_time: "09:15", is_break: false },
+    ])).toEqual([{ after: 0, start: "07:15", end: "07:45", minutes: 30 }]);
+  });
+});

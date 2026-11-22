@@ -18,11 +18,11 @@ use App\Http\Controllers\PublicSchoolController;
 use App\Http\Controllers\RegistrationController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\ReportSettingsController;
-use App\Http\Controllers\ScheduleImportController;
 use App\Http\Controllers\ScheduleMapController;
 use App\Http\Controllers\SchedulerDashboardController;
 use App\Http\Controllers\SchoolYearController;
 use App\Http\Controllers\SectionController;
+use App\Http\Controllers\SectionPeriodController;
 use App\Http\Controllers\SectionRoomController;
 use App\Http\Controllers\SubjectController;
 use App\Http\Controllers\TeacherController;
@@ -43,7 +43,6 @@ Route::get('/me', [AuthController::class, 'me']);
 Route::get('/public/school', [PublicSchoolController::class, 'show']);
 // Which sign-in buttons to show: "Continue with Google" only once the school has set it up.
 Route::get('/auth/providers', fn () => response()->json(['data' => ['google' => \App\Http\Controllers\GoogleAuthController::isConfigured()]]));
-Route::get('/public/school/photo', [PublicSchoolController::class, 'photo']);
 
 Route::middleware('throttle:login')->post('/login', [AuthController::class, 'login'])->name('login');
 // The second step of signing in: the code sent to the DepEd email.
@@ -108,15 +107,11 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
 
     Route::get('/report-settings', [ReportSettingsController::class, 'index']);
     Route::put('/school-profile', [ReportSettingsController::class, 'saveProfile']);
-    Route::post('/school-profile/logos', [ReportSettingsController::class, 'addLogo']);
-    Route::post('/school-profile/photo', [ReportSettingsController::class, 'savePhoto']);
-    Route::delete('/school-profile/photo', [ReportSettingsController::class, 'removePhoto']);
-    Route::delete('/school-profile/logos/{index}', [ReportSettingsController::class, 'removeLogo'])->whereNumber('index');
-    Route::put('/school-profile/logos/{index}/placement', [ReportSettingsController::class, 'placeLogo'])->whereNumber('index');
     Route::put('/report-settings/documents', [ReportSettingsController::class, 'saveDocument']);
     Route::get('/terms/{term}/signatories', [ReportSettingsController::class, 'signatories']);
     Route::post('/terms/{term}/signatories', [ReportSettingsController::class, 'addSignatory']);
     Route::post('/terms/{term}/signatories/copy', [ReportSettingsController::class, 'copySignatories']);
+    Route::put('/terms/{term}/signatories/slots', [ReportSettingsController::class, 'saveSignatorySlots']);
     Route::put('/signatories/{signatory}', [ReportSettingsController::class, 'updateSignatory'])->whereNumber('signatory');
     Route::delete('/signatories/{signatory}', [ReportSettingsController::class, 'deleteSignatory'])->whereNumber('signatory');
     Route::post('/signatories/{signatory}/move', [ReportSettingsController::class, 'moveSignatory'])->whereNumber('signatory');
@@ -136,12 +131,14 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
     Route::get('/terms/{term}/rooms/{room}/schedule', [ScheduleMapController::class, 'room']);
     Route::post('/terms/{term}/loading/copy', [TeacherLoadingController::class, 'copy']);
     Route::post('/terms/{term}/import-previous', [ImportController::class, 'store']);
-    Route::post('/terms/{term}/schedule-import', [ScheduleImportController::class, 'store']);
     Route::post('/terms/{term}/schedule-copy', [TermCopyController::class, 'store']);
     Route::post('/teachers/quick-add', [TeacherLoadingController::class, 'quickAddTeacher']);
     Route::get('/personnel-options', [TeacherController::class, 'options']);
     Route::post('/personnel-options/{type}', [TeacherController::class, 'storeOption'])
         ->whereIn('type', array_keys(TeacherService::OPTION_TABLES));
+    Route::put('/personnel-options/{type}/{id}', [TeacherController::class, 'renameOption'])
+        ->whereIn('type', array_keys(TeacherService::OPTION_TABLES))
+        ->whereNumber('id');
     Route::delete('/personnel-options/{type}/{id}', [TeacherController::class, 'destroyOption'])
         ->whereIn('type', array_keys(TeacherService::OPTION_TABLES))
         ->whereNumber('id');
@@ -200,6 +197,8 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
     Route::prefix('/terms/{term}/sections/{section}')->group(function () {
         Route::get('/plotter', [PlotterController::class, 'show']);
         Route::get('/free-periods', [PlotterController::class, 'freePeriods']);
+        // A typed start and end time (beneficiary review, Nov 21, 2026): the period it matches, or a new one.
+        Route::post('/periods', [SectionPeriodController::class, 'store']);
         Route::put('/slots/{timeSlot}', [PlotterController::class, 'assign']);
         Route::delete('/slots/{timeSlot}', [PlotterController::class, 'clear']);
         Route::post('/slots/{timeSlot}/move', [PlotterController::class, 'move']);

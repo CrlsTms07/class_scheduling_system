@@ -42,19 +42,27 @@ class SummaryReportService
             ->pluck('section_subjects.teacher_id')
             ->unique();
 
-        // Load Distribution: the hours each loading asks for, plotted or not.
+        // Load Distribution: each teacher's subjects, and the hours they have on the schedule.
         $loadings = SectionSubject::with(['subject', 'section.gradeLevel'])
             ->where('term_id', $term->id)
             ->whereIn('teacher_id', $inScope)
             ->get()
             ->groupBy('teacher_id');
 
-        $minutes = ScheduleEntry::where('term_id', $term->id)
+        $entriesByTeacher = ScheduleEntry::where('term_id', $term->id)
             ->whereIn('teacher_id', $inScope)
             ->where('status', '<>', 'rejected')
             ->get()
-            ->groupBy('teacher_id')
-            ->map(fn ($entries) => $entries->sum(fn (ScheduleEntry $entry) => ScheduleFormat::minutesBetween($entry->start_time, $entry->end_time)));
+            ->groupBy('teacher_id');
+        $minutes = $entriesByTeacher->map(fn ($entries) => $entries->sum(fn (ScheduleEntry $entry) => ScheduleFormat::minutesBetween($entry->start_time, $entry->end_time)));
+        // Face-to-face minutes: a Senior High asynchronous session is not taught in a room (Nov 22, 2026).
+        $f2fMinutes = $entriesByTeacher->map(fn ($entries) => $entries->reject(fn (ScheduleEntry $entry) => $entry->is_async)->sum(fn (ScheduleEntry $entry) => ScheduleFormat::minutesBetween($entry->start_time, $entry->end_time)));
+
+        // An advisory counts as 1 load (team decision, Nov 22, 2026).
+        $advisories = app(TeacherLoadingService::class)->advisoriesIn($term);
+
+        // Each loading's minutes on the schedule, for the hours a week shown beside it.
+        $sectionMinutes = DB::table('subject_minutes_check')->where('term_id', $term->id)->pluck('scheduled_minutes', 'section_subject_id');
 
         $departments = DB::table('departments')->pluck('name', 'id');
 
@@ -62,18 +70,23 @@ class SummaryReportService
             ->orderBy('last_name')
             ->orderBy('first_name')
             ->get()
-            ->map(function (Teacher $teacher) use ($loadings, $minutes, $departments, $user) {
+            ->map(function (Teacher $teacher) use ($loadings, $minutes, $f2fMinutes, $advisories, $departments, $user, $sectionMinutes) {
                 $load = $loadings->get($teacher->id, collect());
                 $scheduled = (int) $minutes->get($teacher->id, 0);
-                $loadedMinutes = (int) $load->sum(fn (SectionSubject $row) => $row->subject->minutes_per_week);
+                // Hours come from the schedule (subjects have no typed minutes since Nov 21, 2026).
+                $loadedMinutes = $scheduled;
 
                 return [
                     'id' => $teacher->id,
                     'name' => $teacher->printedName(),
                     'department' => $departments[$teacher->department_id] ?? null,
-                    'assigned' => $load->count(),
+                    // Loads = subjects + 1 for an advisory; past the limit (5) is an Overload.
+                    'assigned' => $load->count() + (isset($advisories[$teacher->id]) ? 1 : 0),
+                    'subjects' => $load->count(),
+                    'advises' => $advisories[$teacher->id] ?? null,
                     'limit' => $teacher->max_subjects,
-                    'is_overloaded' => $load->count() > $teacher->max_subjects,
+                    'is_overloaded' => $load->count() + (isset($advisories[$teacher->id]) ? 1 : 0) > $teacher->max_subjects,
+                    'f2f_hours_per_week' => round(((int) $f2fMinutes->get($teacher->id, 0)) / 60, 1),
                     'minutes' => $scheduled,
                     'duration' => $scheduled > 0 ? ScheduleFormat::duration($scheduled) : '–',
                     'classes' => $load
@@ -85,8 +98,6 @@ class SummaryReportService
                         ->values()
                         ->all(),
                     'hours_per_week' => round($loadedMinutes / 60, 1),
-                    'max_hours' => $teacher->max_hours_per_week,
-                    'is_over_hours' => $loadedMinutes > $teacher->max_hours_per_week * 60,
                     // Hours in another department still count, but show only its name.
                     'loads' => $load
                         ->sortBy(fn (SectionSubject $row) => [$row->section->gradeLevel->grade, $row->section->name, $row->subject->name])
@@ -95,7 +106,7 @@ class SummaryReportService
                             'section_id' => $rows->first()->section->isVisibleTo($user) ? $rows->first()->section_id : null,
                             'section' => $rows->first()->section->labelFor($user),
                             'subject' => $rows->first()->section->isVisibleTo($user) ? $rows->first()->subject->name : 'Other department',
-                            'hours_per_week' => round($rows->sum(fn (SectionSubject $row) => $row->subject->minutes_per_week) / 60, 1),
+                            'hours_per_week' => round($rows->sum(fn (SectionSubject $row) => (int) ($sectionMinutes[$row->id] ?? 0)) / 60, 1),
                         ])
                         ->values()
                         ->all(),
@@ -108,7 +119,6 @@ class SummaryReportService
             'summary' => [
                 'teachers' => $teachers->count(),
                 'overloaded' => $teachers->where('is_overloaded', true)->count(),
-                'over_hours' => $teachers->where('is_over_hours', true)->count(),
             ],
             'teachers' => $teachers->all(),
         ];
@@ -284,7 +294,7 @@ class SummaryReportService
     public function adviserSummarySheet(array $data): ReportSheet
     {
         $rows = [
-            [DB::table('school_profile')->value('school_name')],
+            [\App\Support\SchoolProfile::current()->school_name],
             ['ADVISER SUMMARY'],
             [$data['term_label']],
         ];
@@ -369,7 +379,7 @@ class SummaryReportService
             ['TEACHER LOAD REPORT'],
             [$data['term_label']],
             [],
-            ['Teacher', 'Department', 'Assigned', 'Limit', 'Minutes per week', 'Classes', 'Overloaded'],
+            ['Teacher', 'Department', 'Loads (subjects + 1 for an advisory)', 'Limit', 'Minutes per week', 'Classes', 'Overload'],
         ];
 
         foreach ($data['teachers'] as $teacher) {

@@ -21,11 +21,18 @@ class SubjectPolicy
      */
     public function manageGrade(User $user, Subject|int $subjectOrGradeLevelId): bool
     {
+        // A subject of the other level is the Admin's to change (Nov 21, 2026).
+        $own = $user->departmentsInScope();
+        if ($subjectOrGradeLevelId instanceof Subject && $own !== null && $subjectOrGradeLevelId->level !== null && ! in_array($subjectOrGradeLevelId->level, $own, true)) {
+            return false;
+        }
+
         $gradeLevelId = $subjectOrGradeLevelId instanceof Subject
             ? $subjectOrGradeLevelId->grade_level_id
             : $subjectOrGradeLevelId;
 
+        // A subject with no grade is for every grade (Nov 21, 2026), so every scheduler shares it.
         return $user->hasAnyRole([User::ROLE_ADMIN, 'glc', 'master_teacher'])
-            && in_array($gradeLevelId, $user->gradeLevelIdsInScope());
+            && ($gradeLevelId === null || in_array($gradeLevelId, $user->gradeLevelIdsInScope()));
     }
 }

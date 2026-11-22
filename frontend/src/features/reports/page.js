@@ -204,8 +204,8 @@ export async function render(container, { query, navigate }) {
         ? h("p", { class: "text-sm text-muted-foreground" }, "No teacher has loading yet.")
         : h("ul", { class: "card divide-y" }, data.teachers.map((/** @type {any} */ item) =>
             h("li", { class: "space-y-1 p-3 text-sm" },
-              h("div", { class: "flex flex-wrap items-center justify-between gap-2" }, h("p", { class: "font-medium" }, item.name), item.is_overloaded ? h("span", { class: "badge bg-red-100 text-red-900 dark:bg-red-900 dark:text-red-100" }, "Over the limit") : null),
-              h("p", { class: "text-small text-muted-foreground" }, `${item.assigned} of ${item.limit} subjects · ${item.minutes} minutes a week${item.department ? ` · ${item.department}` : ""}`),
+              h("div", { class: "flex flex-wrap items-center justify-between gap-2" }, h("p", { class: "font-medium" }, item.name), item.is_overloaded ? h("span", { class: "badge bg-red-100 text-red-900 dark:bg-red-900 dark:text-red-100" }, "Overload") : null),
+              h("p", { class: "text-small text-muted-foreground" }, `${item.assigned} / ${item.limit} loads${item.advises ? ` (incl. advisory of ${item.advises})` : ""} · ${item.minutes} minutes a week${item.department ? ` · ${item.department}` : ""}`),
               item.classes.length ? h("p", { class: "text-small text-muted-foreground" }, item.classes.join(", ")) : null,
             ),
           )),

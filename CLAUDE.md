@@ -117,6 +117,38 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
   Profile, the guide and the Guest view with QR codes. Tests: 100 Vitest and 44 Playwright (sizes 360×640,
   844×390, 1366×768). It was built as `frontend-v2/`; on Nov 18, 2026 the React app was removed (still in the
   Git history, commit `51a4cca`) and the folder was renamed `frontend/`.
+- **Beneficiary review (team decisions, Nov 21, 2026, see `docs/client-notes.md` and
+  `docs/paper/Update_Info for changes.pdf`):** no Excel import of any kind (schedules or master data; exports stay
+  PDF and CSV). One process in one order on the Setup menu, the Dashboard and each page: 1 Teachers, 2 Subjects &
+  Class Hours, 3 Rooms & Buildings, 4 Sections (adviser and room required), 5 Teacher Loading, then Make the
+  schedule (Rooms moved before Sections, Nov 21, 2026, so each step needs only the ones before it) (the Setup Guide page, the separate setup
+  checklist and the "How to make a schedule" page were removed). Teachers: department required, `employee_id`,
+  no typed "most hours a week" or "name on printed forms" (printed names come from the record), and a 6th subject
+  is refused with "Full load". Class times are chosen while plotting: a typed start and end becomes a period of the
+  section's bell schedule (`PeriodService`, `POST /terms/{term}/sections/{section}/periods`); Time Slots is the
+  optional "Class Hours" page. Subjects are names only (no grade, no typed minutes; migration
+  `2026_11_21_110000_subjects_name_only`): "Add a subject" in Teacher Loading joins subject, section and teacher,
+  minutes are counted from the schedule, and the only minutes rule left is Homeroom at most 60.
+- **Screen review (team decisions, Nov 21, 2026, afternoon, see `docs/client-notes.md`):** live checks in every form
+  (`lib/calendar-rules.js` for school years and terms); the school year name comes from its dates; no Copy step;
+  teaching personnel only (non-teaching is a stated limitation); no employee ID or education; departments and
+  designations edited in their dropdowns (`searchableSelect` `manage`); Subjects & Class Hours as one step with
+  Senior High details for the Admin only; activities added in the class form; school details and logo built in
+  (`App\Support\SchoolProfile`, `config/school.php`, `resources/images/ercihs-logo.png`); 4 fixed signatories
+  (`PUT /terms/{term}/signatories/slots`); buildings "Used by".
+- **Clearer plotter (team decisions, Nov 21, 2026, evening, see `docs/client-notes.md`):** MATATAG weekly targets as a
+  guide for Junior High subjects (`config/curriculum.php`, `App\Support\Curriculum`, "3 of 5 days"); the subject
+  marked Next with "Place next" and going on by itself; minutes per day strip; amber flag for over 6 teaching
+  hours a day (`teacher_day_minutes`).
+- **Senior High blocks and loads (team decisions, Nov 22, 2026, see `docs/client-notes.md`):** SHS block schedule
+  (`config('school.shs_blocks')`: 6:00–8:00, 8:00–10:00 F2F, Recess, 10:20–12:20 F2F, Lunch, 1:20–2:50 asynchronous),
+  "Use the Senior High blocks" on Class Hours and `php artisan db:seed --class=ShsScheduleSeeder` (adds only what is
+  missing); each SHS subject needs 2 F2F blocks of 120 and 90 asynchronous minutes a week (`config/curriculum.php`
+  SHS and SHS_DEFAULT, amber `shs_blocks` flag); Homeroom at most 40 minutes (JHS) and 60 (SHS), taking only those minutes from the start of a longer period
+  (`ScheduleService::endIn`); an advisory counts
+  as 1 load (`teacher_load` view: `adviser_credit`, `loads`), so "Full load" and Overload count it. Teachers page:
+  everyone sees every teacher with a Junior High / Senior High badge; a Chairperson edits Junior High teachers,
+  the Master Teacher Senior High ones, the Admin all (`TeacherService::viewOnlyFor`).
 - **Back-end:** migrations, seeders, auth, plotter, approvals and JHS Class Program PDF are done.
 - **Deployment:** Render (one Docker service for Laravel and the web app) with a Supabase database (Neon as a
   fallback). Steps, including
@@ -183,9 +215,9 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
 - **Quick-add teacher:** in the plotter's teacher dropdown, typing a name that does not
   exist offers "+ Add new teacher". This creates a minimal teacher record (name only, to
   be completed later). Never store teacher names as free text on schedule entries.
-- Profile includes educational qualifications (`teacher_qualifications`), department,
-  designation, **shift (AM/PM/WHOLE_DAY)**, max subjects (default 5) and
-  teaching-related tasks (ICT/SSG Coordinator, Lab Manager) per term.
+- Profile includes department and designation (both required), **shift (AM/PM/WHOLE_DAY)**, max loads
+  (5; each subject of a section is 1 load and an advisory is 1 more, Nov 22, 2026) and teaching-related tasks (ICT/SSG Coordinator, Lab Manager) per term. Teaching personnel only, and no
+  educational qualifications (team decisions, Nov 21, 2026).
 
 ### Sections
 - Encoded once per **school year** (they change yearly) by the **Admin**, or by a GLC or Master Teacher
@@ -203,6 +235,8 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
   Lengths may differ.
 - The Admin edits patterns and slots, with a "copy pattern" button. A GLC or Master Teacher edits those of
   their own department (JHS or SHS), since they make the schedules (team decision, Nov 10, 2026).
+- Class times are chosen while plotting (Nov 21, 2026): a typed start and end uses the matching period or
+  becomes a new one of the section's pattern (a day with none gets one), so time slots need no setup first.
 - The plotter shows the slots of the selected pattern. A subject placed in a pattern is
   saved as one `schedule_entries` row **per day** of that pattern. Each entry must
   match a slot of its day's pattern and must not overlap a break.
@@ -225,10 +259,15 @@ npm run test:e2e                  # Playwright; only against a throwaway databas
 **Soft rules: entry is saved but flagged** (red or amber badge in the plotter, and listed
 in the Conflict and Validation Report). Submitting is blocked until fixed or
 acknowledged:
-- Scheduled minutes are not equal to the subject's `minutes_per_week`. Example:
-  **Homeroom Guidance is limited to 60 minutes**. Use the `subject_minutes_check` view.
+- **Homeroom Guidance is over its limit**: 40 minutes a week in Junior High, 60 in Senior High
+  (`config('school.homeroom_minutes')`, `Curriculum::homeroomMinutes()`, from the `subject_minutes_check` view).
+- **A Senior High subject lacks or exceeds its blocks** (Nov 22, 2026): 2 F2F blocks of 120 minutes and 90
+  asynchronous minutes a week by default (`config/curriculum.php`); amber, to fix or acknowledge. Junior High
+  subjects have no typed minutes (their MATATAG targets are a guide only).
 - The entry is outside the section's or teacher's shift, or overlaps a break.
-- The teacher is over `max_subjects` (`teacher_load` view).
+- The teacher is over `max_subjects` loads (`teacher_load` view; an advisory counts as 1 load, Nov 22, 2026). A
+  subject past the limit is refused in Teacher Loading ("Full load"), so this flag shows when an advisory is
+  given to a teacher who is already full, or for older data.
 - The section has no adviser, or an open slot is still unfilled.
 
 ## Copy schedule to the next term
@@ -288,8 +327,8 @@ cleaner:
     Never hard-code them.
 - **Footer:** school contact info and the document control block (Doc. Ref. Code,
   Rev, Effectivity, Page X of Y) from `report_settings`.
-- Teacher names on documents use `teachers.display_name` (fallback: first name + middle
-  initial + last name).
+- Teacher names on documents are first name + middle initial + last name, made by the code
+  (`Teacher::printedName()`; the typed "name on printed forms" was removed, Nov 21, 2026).
 
 **On-screen view (enhanced, not a copy of the paper):**
 - Color per subject and highlighted break or lunch rows
@@ -391,7 +430,7 @@ tablets and desktops. Test at 360×640, 390×844, 844×390 (landscape), 768×102
 3. **Test what you build.**
    - Pest tests for back-end logic. Conflict tests must cover: overlap, back-to-back,
      different day, different term, rejected entry ignored, open slot, and Homeroom
-     over 60 minutes flagged.
+     over its limit flagged (40 JHS, 60 SHS).
    - Run the tests and the build before saying a task is done.
 4. **Ask, don't guess.** Check the "Open questions" in `docs/client-notes.md`. Do not
    decide those yourself.

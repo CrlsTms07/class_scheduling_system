@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Models\DayPattern;
 use App\Models\TimeSlot;
 use App\Support\ScheduleFormat;
+use App\Support\ShiftHours;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
@@ -24,6 +25,7 @@ class SaveTimeSlotRequest extends FormRequest
     {
         return [
             'is_break' => ['required', 'boolean'],
+            'is_async' => ['sometimes', 'boolean'],
             'label' => ['nullable', 'string', 'max:40', 'required_if_accepted:is_break'],
             'start_time' => ['required', 'date_format:H:i'],
             'end_time' => ['required', 'date_format:H:i', 'after:start_time'],
@@ -43,7 +45,31 @@ class SaveTimeSlotRequest extends FormRequest
 
     public function after(): array
     {
-        return [fn (Validator $validator) => $this->validateNoOverlap($validator)];
+        return [
+            fn (Validator $validator) => $this->validateNoOverlap($validator),
+            // Inside the hours of the shift (Junior High, Nov 22, 2026).
+            function (Validator $validator) {
+                $pattern = $this->route('dayPattern') ?? $this->route('timeSlot')?->dayPattern;
+                if ($validator->errors()->has('start_time') || $validator->errors()->has('end_time') || ! $pattern) {
+                    return;
+                }
+                $problem = ShiftHours::problem($pattern->level, $pattern->shift, (string) $this->input('start_time'), (string) $this->input('end_time'));
+                if ($problem !== null) {
+                    $validator->errors()->add(str_contains($problem, 'start at') ? 'start_time' : 'end_time', $problem);
+                }
+            },
+            function (Validator $validator) {
+                if (! $this->boolean('is_async')) {
+                    return;
+                }
+                $pattern = $this->route('dayPattern') ?? $this->route('timeSlot')?->dayPattern;
+                if ($this->boolean('is_break')) {
+                    $validator->errors()->add('is_async', 'A break cannot be asynchronous; only a period can.');
+                } elseif ($pattern && $pattern->level !== 'SHS') {
+                    $validator->errors()->add('is_async', 'Asynchronous sessions are for Senior High only.');
+                }
+            },
+        ];
     }
 
     /**

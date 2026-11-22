@@ -111,7 +111,7 @@ class ScheduleReportService
                 $department,
                 $advisory ? "Adviser of {$advisory->label()}" : null,
             ])),
-            'signatories' => $this->reports->signatories($term, 'teacher_program', null, ['teacher' => $teacher->printedName()]),
+            'signatories' => $this->reports->signatories($term, 'teacher_program', 'JHS', ['teacher' => $teacher->printedName()]),
             ...$this->grid($entries, fn (ScheduleEntry $entry) => $entry->activity_id !== null
                 ? [$entry->subjectName()]
                 : ($this->isOwn($entry)
@@ -173,7 +173,7 @@ class ScheduleReportService
                 $room->room_name,
                 $room->capacity ? "Capacity: {$room->capacity}" : null,
             ])),
-            'signatories' => $this->reports->signatories($term, 'room_schedule', null),
+            'signatories' => $this->reports->signatories($term, 'room_schedule', 'JHS'),
             ...$this->grid($entries, fn (ScheduleEntry $entry) => $this->isOwn($entry)
                 ? [$entry->section->label(), $entry->subjectName(), $entry->teacher?->printedName()]
                 : [$entry->section->labelFor()]),
@@ -236,7 +236,7 @@ class ScheduleReportService
             'term' => $term,
             'term_label' => "{$term->name}, School Year {$term->schoolYear->name}",
             'buildings' => $buildings,
-            'school' => DB::table('school_profile')->first(),
+            'school' => \App\Support\SchoolProfile::current(),
             'logos' => $this->settings->logoDataUris(),
         ];
     }
@@ -374,7 +374,7 @@ class ScheduleReportService
         $settings = $this->reports->documentSettings($reportType, null);
 
         return [
-            'school' => DB::table('school_profile')->first(),
+            'school' => \App\Support\SchoolProfile::current(),
             'logos' => $this->settings->logoDataUris(),
             'title' => $settings?->title_format ?? $defaultTitle,
             'settings' => $settings,

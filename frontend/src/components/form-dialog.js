@@ -20,15 +20,21 @@ import { toast } from "./toast.js";
  * @property {"text" | "email" | "number" | "date" | "textarea" | "select" | "checkbox" | "time" | "multi"} [type]
  * @property {any} [value]
  * @property {boolean} [required]
+ * @property {(values: Record<string, any>) => boolean} [requiredWhen]  required only in some cases (like a Senior High section's track)
  * @property {string} [help]
- * @property {{ value: string | number, label: string, hint?: string }[]} [options]  for select and multi
+ * @property {{ value: string | number, label: string, hint?: string, disabled?: boolean }[]} [options]  for select and multi
  * @property {number} [min]
  * @property {number} [max]
  * @property {boolean} [wide]  takes the whole row on wide screens
  * @property {boolean} [disabled]
  * @property {(value: any, values: Record<string, any>) => string | null} [check]  an extra rule
- * @property {(typed: string) => Promise<{ value: string | number, label: string }>} [onCreate]  select: adds what was typed
+ * @property {(typed: string) => Promise<{ value: string | number, label: string } | null>} [onCreate]  select: adds what was typed (null: cancelled)
+ * @property {false} [createdMessage]  select: onCreate shows its own message, so no "was added" here
  * @property {boolean} [localCreate]  select: what was typed is only used in this form (saved with it), so no "was added" message
+ * @property {(option: { value: string | number, label: string }, name: string) => Promise<void>} [onRename]  select: renames a choice in the list
+ * @property {(option: { value: string | number, label: string }) => Promise<void>} [onDelete]  select: deletes a choice from the list
+ * @property {(values: Record<string, any>) => { value: string | number, label: string, hint?: string }[]} [optionsFor]
+ *   select: its choices follow other fields (like departments of the chosen Junior or Senior High)
  *
  * @typedef {object} FormOptions
  * @property {string} title
@@ -38,6 +44,7 @@ import { toast } from "./toast.js";
  * @property {(values: Record<string, any>) => Promise<string | void>} onSubmit  returns the success message
  * @property {{ label: string, message: string, run: () => Promise<string | void>, blockedReason?: string | null }} [remove]
  * @property {import("@/lib/dom.js").Child} [extra]  more content under the fields
+ * @property {() => void} [onClose]  called when the form closes, saved or not
  */
 
 /**
@@ -58,7 +65,7 @@ export function buildField(spec, onEdit = () => {}) {
       "label",
       { class: "field-label", htmlFor: forId },
       spec.label,
-      spec.required || spec.type === "checkbox"
+      spec.required || spec.requiredWhen || spec.type === "checkbox"
         ? null
         : h(
             "span",
@@ -69,13 +76,15 @@ export function buildField(spec, onEdit = () => {}) {
   const help = spec.help ? h("p", { class: "field-help" }, spec.help) : null;
   /** @type {() => any} */
   let read;
+  /** @type {(options: { value: string | number, label: string }[]) => void} */
+  let setOptions = () => {};
   /** @type {HTMLElement} */
   let element;
 
   if (spec.type === "select") {
     let choices = spec.options ?? [];
     const select = searchableSelect({
-      label: spec.label + (spec.required ? "" : " (optional)"),
+      label: spec.label + (spec.required || spec.requiredWhen ? "" : " (optional)"),
       options: choices,
       value: spec.value ?? "",
       help: spec.help,
@@ -91,11 +100,12 @@ export function buildField(spec, onEdit = () => {}) {
                   await /** @type {NonNullable<FieldSpec["onCreate"]>} */ (
                     spec.onCreate
                   )(typed);
+                if (!option) return;
                 choices = [...choices, option];
                 select.setOptions(choices);
                 select.setValue(option.value);
                 onEdit();
-                if (!spec.localCreate)
+                if (!spec.localCreate && spec.createdMessage !== false)
                   toast.success(`${option.label} was added.`);
               } catch (error) {
                 toast.error(error);
@@ -103,8 +113,29 @@ export function buildField(spec, onEdit = () => {}) {
             },
           }
         : undefined,
+      manage: spec.onRename && spec.onDelete
+        ? {
+            rename: async (option, name) => {
+              await /** @type {NonNullable<FieldSpec["onRename"]>} */ (spec.onRename)(option, name);
+              choices = choices.map((item) => (String(item.value) === String(option.value) ? { ...item, label: name } : item));
+              select.setOptions(choices);
+              toast.success(`${option.label} is now ${name}.`);
+            },
+            remove: async (option) => {
+              await /** @type {NonNullable<FieldSpec["onDelete"]>} */ (spec.onDelete)(option);
+              choices = choices.filter((item) => String(item.value) !== String(option.value));
+              select.setOptions(choices);
+              toast.success(`${option.label} was deleted.`);
+            },
+          }
+        : undefined,
     });
     read = () => select.getValue();
+    setOptions = (/** @type {{ value: string | number, label: string }[]} */ next) => {
+      choices = next;
+      select.setOptions(next);
+      if (!next.some((option) => String(option.value) === String(select.getValue()))) select.setValue("");
+    };
     element = h("div", null, select, error);
   } else if (spec.type === "multi") {
     // Several choices, as toggle buttons (grade levels, days).
@@ -226,6 +257,7 @@ export function buildField(spec, onEdit = () => {}) {
   return {
     element,
     read,
+    setOptions: (/** @type {{ value: string | number, label: string }[]} */ next) => setOptions(next),
     /** @param {string | null} message */
     setError: (message) => {
       error.textContent = message ?? "";
@@ -246,21 +278,31 @@ export function openFormDialog({
   onSubmit,
   remove,
   extra,
+  onClose,
 }) {
   /** Fields the user has changed: they are checked at once, the others only when Save is pressed. */
   const touched = new Set();
-  /** @type {{ spec: FieldSpec, element: HTMLElement, read: () => any, setError: (message: string | null) => void }[]} */
+  /** @type {{ spec: FieldSpec, element: HTMLElement, read: () => any, setError: (message: string | null) => void, setOptions: (options: any[]) => void }[]} */
   const built = [];
+  /** Selects whose choices follow other fields get their choices again. */
+  const follow = (/** @type {string | null} */ changed) => {
+    /** @type {Record<string, any>} */
+    const values = {};
+    for (const item of built) values[item.spec.name] = item.read();
+    for (const item of built) if (item.spec.optionsFor && item.spec.name !== changed) item.setOptions(item.spec.optionsFor(values));
+  };
   for (const spec of fields) {
     const item = {
       spec,
       ...buildField(spec, () => {
         touched.add(spec.name);
+        follow(spec.name);
         check(false);
       }),
     };
     built.push(item);
   }
+  follow(null);
   const formError = h("p", {
     class:
       "rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm text-danger",
@@ -292,7 +334,7 @@ export function openFormDialog({
         value === "" ||
         (Array.isArray(value) && value.length === 0);
       const problem =
-        (item.spec.required && item.spec.type !== "checkbox" && isEmpty
+        ((item.spec.required || item.spec.requiredWhen?.(values)) && item.spec.type !== "checkbox" && isEmpty
           ? `${item.spec.label} is required`
           : null) ??
         item.spec.check?.(value, values) ??
@@ -338,7 +380,9 @@ export function openFormDialog({
             : "Something went wrong. Please try again.";
         formError.hidden = false;
       }
-      toast.error(error);
+      // A check of the form itself (a plain Error) is already shown above; only a server answer
+      // also gets a toast, so no misleading "check your connection" appears (Nov 22, 2026).
+      if (error instanceof ApiError) toast.error(error);
     }
   };
 
@@ -374,6 +418,7 @@ export function openFormDialog({
     title,
     description,
     size: fields.length > 5 ? "lg" : "md",
+    onClose,
     body: h(
       "div",
       { class: "space-y-4" },

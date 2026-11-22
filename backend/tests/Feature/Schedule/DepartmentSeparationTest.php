@@ -33,6 +33,8 @@ beforeEach(function () {
     $this->master = User::factory()->create()->assignRole('master_teacher');
     $this->master->gradeLevels()->sync([$grade11]);
 
+    // This test makes its own Senior High bell schedule (the seeded blocks are left out).
+    DB::table('day_patterns')->where('school_year_id', $this->sectionA->school_year_id)->where('level', 'SHS')->delete();
     $pattern = DB::table('day_patterns')->insertGetId([
         'school_year_id' => $this->sectionA->school_year_id, 'level' => 'SHS', 'shift' => 'WHOLE_DAY', 'name' => 'Monday – Friday', 'days' => '{1,2,3,4,5}',
     ]);
@@ -73,14 +75,16 @@ it('adds up the other department in room usage', function () {
     expect(json_encode($rooms))->toContain('Junior High section')->not->toContain('Sample A');
 });
 
-it('lists every teacher, but a teacher of the other department only is view-only', function () {
+it('lists every teacher, but a Junior High teacher is view only for the Master Teacher (Nov 22, 2026)', function () {
     $this->actingAs($this->master);
     $onlyJhs = SectionSubject::where('section_id', $this->sectionA->id)->whereHas('subject', fn ($q) => $q->where('name', 'Filipino'))->value('teacher_id');
 
     $teachers = collect($this->getJson("/api/terms/{$this->termId}/teachers")->assertOk()->json('data'))->keyBy('id');
 
-    expect($teachers[$onlyJhs]['can_edit'])->toBeFalse()
-        ->and($teachers[$this->valuesTeacher]['can_edit'])->toBeTrue();
+    expect($teachers->has($onlyJhs))->toBeTrue()
+        ->and($teachers[$onlyJhs]['can_edit'])->toBe($teachers[$onlyJhs]['home_level'] === 'SHS')
+        // A Junior High teacher with a Senior High class is still kept by Junior High.
+        ->and($teachers[$this->valuesTeacher]['can_edit'])->toBe($teachers[$this->valuesTeacher]['home_level'] === 'SHS');
 
     $this->deleteJson("/api/teachers/{$onlyJhs}")->assertForbidden();
 });
@@ -105,7 +109,7 @@ it('keeps the classes of the department visible to it', function () {
     expect($this->getJson("/api/terms/{$this->termId}/rooms/{$this->room}/schedule")->json('data.entries.0.subject'))->toBe('Values Education');
 });
 
-it('lets a Master Teacher give a Junior High teacher a Senior High class, and then edit that teacher', function () {
+it('lets a Master Teacher give a Junior High teacher a Senior High class, but the record stays with Junior High', function () {
     $this->actingAs($this->master);
     $juniorTeacher = SectionSubject::where('section_id', $this->sectionA->id)->whereHas('subject', fn ($q) => $q->where('name', 'Filipino'))->value('teacher_id');
     $chem = DB::table('subjects')->insertGetId(['school_year_id' => $this->sectionA->school_year_id, 'grade_level_id' => $this->stem->grade_level_id, 'name' => 'Gen Chem', 'minutes_per_week' => 240]);
@@ -113,9 +117,11 @@ it('lets a Master Teacher give a Junior High teacher a Senior High class, and th
     // The teacher list of the loading offers every teacher, the Junior High ones too.
     $this->putJson("/api/terms/{$this->termId}/sections/{$this->stem->id}/loading/{$chem}", ['teacher_id' => $juniorTeacher])->assertOk();
 
+    // The teacher is listed as Junior High, also teaching Senior High; the Master Teacher may not change
+    // the record (team decision, Nov 22, 2026): their own Chairperson or the Admin does.
     $teachers = collect($this->getJson("/api/terms/{$this->termId}/teachers")->assertOk()->json('data'))->keyBy('id');
-    expect($teachers[$juniorTeacher]['can_edit'])->toBeTrue();
+    expect($teachers[$juniorTeacher]['can_edit'])->toBeFalse()
+        ->and($teachers[$juniorTeacher]['levels'])->toContain('SHS');
 
-    // Now the Master Teacher keeps the record too: deleting is stopped by the loading, not by the department.
-    $this->deleteJson("/api/teachers/{$juniorTeacher}")->assertUnprocessable();
+    $this->deleteJson("/api/teachers/{$juniorTeacher}")->assertForbidden();
 });

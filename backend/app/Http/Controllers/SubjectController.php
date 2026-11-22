@@ -44,7 +44,7 @@ class SubjectController extends Controller
     {
         Gate::authorize('manageGrade', $subject);
 
-        $service->delete($subject, $request->user());
+        $service->delete($subject, $request->user(), $request->boolean('with_loading'));
 
         return response()->json(['message' => "{$subject->name} was deleted."]);
     }

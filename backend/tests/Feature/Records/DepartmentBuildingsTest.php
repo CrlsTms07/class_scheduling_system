@@ -85,6 +85,7 @@ it('offers a section only rooms of its department and shared ones', function () 
 });
 
 it('refuses a room of the other department for a class or a home room', function () {
+    DB::table('day_patterns')->where('school_year_id', $this->yearId)->where('level', 'SHS')->delete();
     $pattern = DB::table('day_patterns')->insertGetId(['school_year_id' => $this->yearId, 'level' => 'SHS', 'shift' => 'WHOLE_DAY', 'name' => 'Monday – Friday', 'days' => '{1,2,3,4,5}']);
     $slot = TimeSlot::create(['day_pattern_id' => $pattern, 'period_no' => 1, 'start_time' => '07:15', 'end_time' => '08:00', 'is_break' => false]);
     $subject = DB::table('subjects')->insertGetId(['school_year_id' => $this->yearId, 'grade_level_id' => $this->stem->grade_level_id, 'name' => 'Gen Bio', 'minutes_per_week' => 240]);

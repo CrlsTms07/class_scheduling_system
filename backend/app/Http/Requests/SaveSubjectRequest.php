@@ -32,13 +32,17 @@ class SaveSubjectRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
+            // Not typed any more: the grade comes from the section in Teacher Loading (Nov 21, 2026).
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            // Junior High or Senior High (Nov 21, 2026): a Chairperson or Master Teacher's own, the Admin's choice.
+            'level' => ['required', Rule::in(['JHS', 'SHS'])],
             'track_id' => ['nullable', 'integer', 'exists:tracks,id'],
             'term_no' => ['nullable', 'integer', 'min:1'],
             'code' => ['nullable', 'string', 'max:20'],
             'name' => ['required', 'string', 'max:100'],
             'subject_type' => ['required', Rule::in(['core', 'elective', 'other'])],
-            'minutes_per_week' => ['required', 'integer', 'between:1,3000'],
+            // Not typed any more: minutes are counted from the schedule (Nov 21, 2026).
+            'minutes_per_week' => ['nullable', 'integer', 'between:1,3000'],
             'is_priority' => ['required', 'boolean'],
             'is_active' => ['required', 'boolean'],
         ];
@@ -61,7 +65,7 @@ class SaveSubjectRequest extends FormRequest
 
     private function validateScope(Validator $validator): void
     {
-        if ($validator->errors()->has('grade_level_id')) {
+        if ($validator->errors()->has('grade_level_id') || ! $this->filled('grade_level_id')) {
             return;
         }
 
@@ -72,7 +76,13 @@ class SaveSubjectRequest extends FormRequest
 
     private function validateTrack(Validator $validator): void
     {
-        if ($validator->errors()->has('grade_level_id') || ! $this->filled('track_id')) {
+        if ($this->filled('track_id') && $this->input('level') === 'JHS') {
+            $validator->errors()->add('track_id', 'Only Senior High subjects have a track.');
+
+            return;
+        }
+
+        if ($validator->errors()->has('grade_level_id') || ! $this->filled('track_id') || ! $this->filled('grade_level_id')) {
             return;
         }
 
@@ -103,6 +113,19 @@ class SaveSubjectRequest extends FormRequest
     /**
      * The same name is fine in another grade, track or term.
      */
+    /**
+     * A Chairperson or Master Teacher adds and keeps subjects of their own level only.
+     */
+    protected function prepareForValidation(): void
+    {
+        $own = $this->user()->departmentsInScope();
+        if ($own !== null && count($own) === 1) {
+            $this->merge(['level' => $own[0]]);
+        } elseif (! $this->filled('level') && $this->route('subject')) {
+            $this->merge(['level' => $this->route('subject')->level]);
+        }
+    }
+
     private function validateUniqueName(Validator $validator): void
     {
         if ($validator->errors()->hasAny(['grade_level_id', 'name', 'track_id', 'term_no'])) {
@@ -110,7 +133,8 @@ class SaveSubjectRequest extends FormRequest
         }
 
         $taken = Subject::where('school_year_id', $this->year()->id)
-            ->where('grade_level_id', $this->input('grade_level_id'))
+            ->whereRaw('COALESCE(grade_level_id, 0) = ?', [(int) $this->input('grade_level_id')])
+            ->where(fn ($query) => $query->where('level', $this->input('level'))->orWhereNull('level'))
             ->whereRaw('COALESCE(track_id, 0) = ?', [(int) $this->input('track_id')])
             ->whereRaw('COALESCE(term_no, 0) = ?', [(int) $this->input('term_no')])
             ->whereRaw('LOWER(name) = LOWER(?)', [trim($this->input('name'))])
@@ -118,7 +142,7 @@ class SaveSubjectRequest extends FormRequest
             ->exists();
 
         if ($taken) {
-            $validator->errors()->add('name', 'This grade level already has this subject for the same track and time of the year.');
+            $validator->errors()->add('name', 'This subject is already in the list for the same track and time of the year.');
         }
     }
 }

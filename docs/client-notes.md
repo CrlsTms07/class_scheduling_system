@@ -266,6 +266,132 @@ Based on a reference prototype the team reviewed (removed from the repo on Nov 1
 - **Role badge with the department:** "GLC · JHS" or "MT · SHS" under the user's name. A Chairperson still sees
   every teacher, since teachers move between Junior and Senior High.
 
+## Team decisions (Nov 21, 2026), after the beneficiary's review (docs/paper/Update_Info for changes.pdf)
+
+The beneficiary said the process was hard to follow, there were too many features, and data integrity matters
+most. These replace the earlier Nov 21 notes (master-data import and Setup Guide, both removed the same day).
+
+- **No Excel import at all:** "Why import if the system is for making schedules?" The schedule import and the
+  master-data import were removed. Records are typed on their pages. Exports stay PDF and CSV.
+- **One process, one order** on the Setup menu and the Dashboard (teacher, then subject, then section, as the
+  beneficiary explained): 1 Teachers, 2 Subjects, 3 Sections, 4 Rooms & Buildings, 5 Teacher Loading, then Make the
+  schedule. The Admin also sees the school year and accounts before, and Report Settings before printing. The Setup
+  Guide page, the Dashboard's separate "School setup" checklist and the "How to make a schedule" page were removed.
+- **Teachers:** the department is required (quick-add from the plotter stays name-only and is marked "No department
+  yet"); `employee_id` is kept; "Most hours a week" and "Name on printed forms" are gone (printed names are first
+  name + middle initial + last name); a teacher carries at most 5 subjects a term, and a 6th is refused with
+  "Full load" (copies of teacher loading leave such subjects without a teacher and say so).
+- **Time slots are not a separate setup:** the start and end are chosen in the class form while plotting. A typed
+  time becomes a period of the section's bell schedule (a day with none gets one); the end must be after the start
+  and it must not overlap a period or a break. Time Slots is now the optional "Class Hours" page.
+- **Subjects are names only:** no grade level and no typed minutes per week (code, type, and the Senior High term and
+  track stay). "Add a subject" in Teacher Loading joins subject, section and teacher in one form. Minutes are
+  counted from the schedule; the only rule left is Homeroom Guidance at most 60 minutes a week. Subjects made before
+  keep their grade and stay listed for it. Nothing was deleted from the database.
+- **Still to confirm with the beneficiary:** mid-shift (e.g. 10:00–3:00) as a shift of its own; the school ID,
+  tagline and address on the school profile form; a minimum length for a term (about 2 months).
+
+## Team decisions (Nov 21, 2026, afternoon), from the team's review of every screen
+
+- **Problems show while working:** every form says what is wrong under the field as soon as it is filled in, and
+  Next or Save waits until it is fixed (school year dates and terms, subject, building, room and section names, the
+  school's contact details, signatories).
+- **Start New School Year:** the name is made from the first day (2026 → 2026-2027, never typed); a school year is
+  one year at most and must not overlap another; each term lies inside it, one after another, at least 2 months.
+  The "Copy" step was removed: subjects, class hours and signatories of the latest year are copied (section names
+  are not). Three steps: Dates, Terms, Review.
+- **Teachers:** teaching personnel only. **Limitation: non-teaching personnel are not part of the system**; its only
+  focus is class scheduling, done by teaching personnel and approved by a higher position. No employee ID (the
+  record's own id is enough) and no education. Department and designation are required and are added, renamed and
+  deleted right in their dropdowns (DepEd designations Teacher I to Head Teacher VI are built in).
+- **Subjects & Class Hours** are one setup step with two tabs. A subject is a name (checked for repeats while
+  typing), edited or deleted from its row. The Senior High details (term, track, type) and the Tracks list are the
+  Admin's only; a Chairperson or Master Teacher just lists names. Minutes stay counted from the schedule.
+- **Activities** are chosen, or typed to add, in the class form while plotting (no separate list on Subjects).
+- **School profile:** the school's name, school ID (301179), region, division, address and logo are built into the
+  system; the Admin only keeps the phone, email and Facebook page up to date. No logo or photo upload.
+- **Signatories:** the same 2×2 block on every form: Prepared by, Conforme (the section's adviser, filled in by the
+  system), Recommending Approval, Approved by; the Admin types each name and position (required).
+- **Buildings:** "Used by" (Junior High, Senior High or Both) replaces "Department", required, with a note on why.
+- **No Excel import:** teachers stay from year to year, and the new school year copies subjects, class hours and
+  signatories, so only sections are encoded each year.
+- **Still to provide:** the DepEd logo (for the top of the forms), if the school wants it beside the ERCIHS logo.
+
+## Team decisions (Nov 21, 2026, evening)
+
+- **Sections:** the adviser and the room are required, and a Senior High section's track and strand too; only
+  the co-adviser and the class size are optional. A missing room can be added from the room dropdown
+  ("+ Add room", with its building).
+- **One order, each step needing only the ones before it:** 1 Teachers, 2 Subjects & Class Hours, 3 Rooms &
+  Buildings, 4 Sections, 5 Teacher Loading, then Make the schedule. Rooms moved before Sections, since a section
+  needs its room; the beneficiary's "teacher, then subject, then section" stays. Same order on the Setup menu,
+  the Dashboard steps and each page's "Step N".
+- **Period times are fixed on Class Hours only** (not in the plotter): a bell schedule is shared by every
+  section of that shift, its checks show before Save, and a period that already has classes keeps its time.
+- **A clearer plotter, from the MATATAG time allotment:**
+  - Each Junior High subject shows its weekly target as a guide, built in (`config/curriculum.php`), not typed and
+    not a flag: "3 of 5 days · 135 of 225 mins · 2 more days". It is complete on all its days, so a 40-minute
+    Friday period still counts. The 8 learning areas take 5 days (225 mins), NMP 4 days (120 mins) and Homeroom
+    Guidance 1 day at 60 mins (45 in the MATATAG table; 60 until open question 5 is answered). Senior High has no
+    targets yet.
+  - The first subject not complete is marked **Next**, with a "Place next" button. When it is complete, the
+    plotter goes on to the following one, and an empty period opens with it chosen. Typing a time is a small
+    "Other time…" link.
+  - A strip shows each day's minutes placed out of its bell schedule, grouped as Monday – Thursday and Friday.
+  - A teacher teaching more than 6 hours on a day is flagged in amber (RA 4670, `school.teacher_day_minutes`).
+    The free teachers offered on a conflict show their real hours a week, and those this class would take past 6
+    hours come last, marked.
+  - Later, after the evaluation: Senior High programming options (Option 1/2/3 with asynchronous time), class
+    size limits, and different term structures for Junior and Senior High. These wait for the DepEd order itself
+    (the source we were given cites "DO 17, s. 2026", which still has to be checked).
+
+## Team decisions (Nov 22, 2026)
+
+- **Junior High shift hours:** the morning shift ends by 12:30 PM; the afternoon shift runs from 12:20 PM to
+  6:30 PM (`config('school.shift_hours')`, `App\Support\ShiftHours`). Class Hours rows, presets and times typed
+  while plotting must stay inside them, checked while typing and by the API. Senior High has no such limit.
+- **Presets:** a recess or lunch with minutes must come after an existing period, said on its own field.
+- **Logos:** the DepEd seal in the Report Settings card and at the top of every PDF; the school logo in the PDF
+  footer, as on the official form.
+- **Deleting a subject or section with teacher loading:** allowed with a confirmation that the loading goes too,
+  as long as nothing is on a schedule.
+
+## Team decisions (Nov 22, 2026), from the Master Teacher's Senior High class program
+
+- **Senior High block schedule:** 6:00–8:00 and 8:00–10:00 face-to-face (F2F), Recess 10:00–10:20, 10:20–12:20
+  F2F, Lunch 12:20–1:20, and a 90-minute asynchronous session 1:20–2:50 (`config/school.php`, `shs_blocks`).
+  "Use the Senior High blocks" fills an empty Senior High bell schedule on Class Hours; `ShsScheduleSeeder`
+  adds the blocks and the Grade 11 subjects (General Science, General Mathematics, Life and Career Skills,
+  Pag-aaral ng Kasaysayan, Social Science in Theory and Practice, Effective Communication, Mabisang
+  Komunikasyon, Homeroom Guidance) without changing or deleting anything.
+- **Weekly minutes of a Senior High subject:** 2 F2F blocks of 120 minutes on 2 days plus 90 asynchronous
+  minutes (330 a week); Effective Communication and Mabisang Komunikasyon 1 block of 120 plus 45 asynchronous.
+  Kept in `config/curriculum.php` (subjects stay names only, Nov 21). A subject with other minutes gets an
+  amber flag saying what is missing. This replaces "Senior High has no targets" (Nov 21).
+- **Homeroom Guidance:** at most 40 minutes a week in Junior High and 60 in Senior High (was 60 for both).
+  Placed in a longer period, it takes only its minutes from the start (HGP in the 6:00 – 8:00 block is
+  6:00 – 7:00), like the school's class program, where Monday then totals 390 minutes; the bell schedule does
+  not change and the rest of the block stays free (`ScheduleService::endIn`).
+- **Preset bell schedule:** "Recess comes" and "Lunch comes" are choices ("After period 3 (ends 9:15 AM)")
+  instead of typed numbers. Rows count the breaks too (16 rows with a recess and a lunch = 14 periods), and a
+  break comes after period 1 to 13, never after the last period.
+- **An advisory counts as 1 load:** loads = subject-sections + 1 for advising a section that school year;
+  at most 5 (so an adviser takes 4 subjects). A subject past the limit is refused ("Full load"); Teacher
+  Loading shows "X / 5 loads", "+1 load: adviser", the F2F hours and an Overload badge. Advisers only, not
+  coordinators. Taken from the section's adviser, so there is no separate "is adviser" field to keep in step.
+- **Teachers page:** every teacher is listed for the Admin, Chairpersons and the Master Teacher, each with a
+  "Junior High" or "Senior High" badge (their department's level) and "Also teaches …" when they have classes
+  in the other level. A Chairperson edits only Junior High teachers and the Master Teacher only Senior High
+  ones (the others show "View only", and the API refuses the change); the Admin edits all. A Junior High
+  teacher can still be given a Senior High class in Teacher Loading (marked "From Junior High"); the class
+  counts in their load, but their record stays with Junior High.
+- **School profile (Report Settings):** shown as the printed heading: DepEd seal, "Republic of the
+  Philippines", "Department of Education" (the same gothic font as the forms), region, division, school
+  name and address.
+- **Not done, on purpose:** no `block_type` enum or `teachers.is_adviser` / `max_loads` columns (the existing
+  `is_break` / `is_async`, `sections.adviser_id` and `max_subjects` already say it); exclusion constraints
+  already prevent double-booking; the front-end has no Blade templates.
+
 ## Open questions for the client
 
 1. **JHS scheduler (item 12):** One GLC for all of Grades 7–10, or one GLC per grade

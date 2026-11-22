@@ -7,10 +7,10 @@ import { api } from "./client.js";
 import { invalidate, load, setData } from "@/state/cache.js";
 
 /**
- * @typedef {"WHOLE_DAY" | "AM" | "PM"} Shift
- * @typedef {{ subject_id: number, subject: string, code: string | null, minutes_per_week: number, is_priority: boolean, is_active: boolean, teacher_id: number | null, teacher: string | null, placed_entries: number, locked_reason: string | null }} LoadingRow
- * @typedef {{ id: number, name: string, shift: Shift, assigned: number, limit: number }} LoadingTeacher
- * @typedef {{ section: { id: number, label: string, level: "JHS" | "SHS", shift: Shift, track: string | null, adviser: string | null }, rows: LoadingRow[], teachers: LoadingTeacher[] }} SectionLoading
+ * @typedef {"WHOLE_DAY" | "AM" | "PM" | "PART_TIME"} Shift
+ * @typedef {{ subject_id: number, subject: string, code: string | null, scheduled_minutes: number, is_priority: boolean, is_active: boolean, teacher_id: number | null, teacher: string | null, placed_entries: number, locked_reason: string | null }} LoadingRow
+ * @typedef {{ id: number, name: string, shift: Shift, assigned: number, limit: number, department?: string | null, from_level?: "JHS" | "SHS" | null }} LoadingTeacher
+ * @typedef {{ section: { id: number, label: string, level: "JHS" | "SHS", shift: Shift, track: string | null, adviser: string | null }, rows: LoadingRow[], addable: { id: number, name: string, code: string | null }[], teachers: LoadingTeacher[] }} SectionLoading
  */
 
 /**
@@ -92,7 +92,7 @@ export function getTeacherLoad(termId) {
 }
 
 /** @type {Record<Shift, string>} */
-export const SHIFT_LABELS = { WHOLE_DAY: "Whole day", AM: "Morning (AM)", PM: "Afternoon (PM)" };
+export const SHIFT_LABELS = { WHOLE_DAY: "Whole day", AM: "Morning (AM)", PM: "Afternoon (PM)", PART_TIME: "Part-time" };
 
 /**
  * A morning teacher cannot fully serve an afternoon section, and the other way around.
@@ -102,4 +102,18 @@ export const SHIFT_LABELS = { WHOLE_DAY: "Whole day", AM: "Morning (AM)", PM: "A
 export function shiftWarning(teacherShift, sectionShift) {
   if (teacherShift === "WHOLE_DAY" || teacherShift === sectionShift) return null;
   return `This teacher's shift is ${SHIFT_LABELS[teacherShift]}, but this section's is ${SHIFT_LABELS[sectionShift]}.`;
+}
+
+/**
+ * The line under a teacher in a dropdown: their load, and for a teacher borrowed from the other
+ * level (Nov 21, 2026), where they come from, like "From Junior High · Mathematics · 2 of 5 subjects".
+ * @param {LoadingTeacher} teacher
+ * @param {boolean} [isFull]
+ */
+export function teacherHint(teacher, isFull = false) {
+  // Loads = subjects + 1 for an advisory (team decision, Nov 22, 2026).
+  const advisory = teacher.advises ? `, incl. advisory of ${teacher.advises}` : "";
+  const load = isFull ? `Full load (${teacher.assigned} of ${teacher.limit} loads${advisory})` : `${teacher.assigned} of ${teacher.limit} loads${advisory}`;
+  if (!teacher.from_level) return load;
+  return [`From ${teacher.from_level === "JHS" ? "Junior High" : "Senior High"}`, teacher.department, load].filter(Boolean).join(" · ");
 }

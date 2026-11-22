@@ -1,6 +1,6 @@
 // @ts-check
 import { describe, expect, it } from "vitest";
-import { defaultDays, entryAt, fittingPeriods, hasSubject, minutesText, planMove, subjectColor } from "./schedule.js";
+import { classEnd, classMinutes, dayTotals, defaultDays, entryAt, fittingPeriods, hasSubject, isComplete, minutesText, nextSubject, planMove, progressPercent, progressText, subjectColor } from "./schedule.js";
 
 const slot = (id, start, end, minutes, isBreak = false) => ({ id, period_no: null, label: isBreak ? "Recess" : null, start_time: start, end_time: end, minutes, is_break: isBreak });
 const P1 = slot(1, "07:00", "07:45", 45);
@@ -86,6 +86,7 @@ describe("moving a class", () => {
 
 describe("words and colors", () => {
   it("says how much of a subject is placed", () => {
+    expect(minutesText({ ...loading(160), required_minutes: null })).toBe("160 mins a week on the schedule");
     expect(minutesText(loading(160))).toBe("160 of 220 mins · 60 left");
     expect(minutesText(loading(220))).toBe("220 of 220 mins · Complete");
     expect(minutesText(loading(240))).toBe("240 of 220 mins · Over by 20 mins");
@@ -100,5 +101,87 @@ describe("words and colors", () => {
   it("keeps one color per subject, plain when colors are off", () => {
     expect(subjectColor(50)).toBe(subjectColor(50));
     expect(subjectColor(50, false)).toContain("bg-surface");
+  });
+});
+
+describe("the MATATAG targets in the plotter (Nov 21, 2026)", () => {
+  const withTarget = (days, minutes, sessions = 5) => ({ ...loading(minutes, null), target: { sessions, minutes: sessions === 5 ? 225 : 60 }, days_placed: days });
+
+  it("counts a subject complete on all its days, even with a shorter Friday", () => {
+    expect(isComplete(withTarget(4, 180))).toBe(false);
+    expect(isComplete(withTarget(5, 220))).toBe(true);
+    expect(progressPercent(withTarget(3, 135))).toBe(60);
+    expect(progressText(withTarget(3, 135))).toBe("3 of 5 days · 135 of 225 mins · 2 more days");
+    expect(progressText(withTarget(5, 220))).toBe("5 of 5 days · 220 of 225 mins · Complete");
+  });
+
+  it("says when Homeroom is over its limit, and falls back to minutes with no target", () => {
+    expect(progressText({ ...withTarget(1, 80, 1), required_minutes: 60 })).toBe("1 of 1 day · 80 of 60 mins · Over by 20 mins");
+    expect(progressText(loading(160, null))).toBe("160 mins a week on the schedule");
+    expect(isComplete(loading(0, null))).toBe(false);
+    expect(isComplete(loading(45, null))).toBe(true);
+  });
+
+  it("marks the first subject not complete as next", () => {
+    const done = { ...withTarget(5, 225), id: 1 };
+    const open = { ...withTarget(2, 90), id: 2 };
+    expect(nextSubject([done, open])?.id).toBe(2);
+    expect(nextSubject([done])).toBeNull();
+  });
+
+  it("adds up each day's periods and placed classes, breaks left out", () => {
+    const patterns = [
+      { id: 1, name: "Monday – Thursday", days: [1, 2, 3, 4], slots: [
+        { id: 1, period_no: 1, label: null, start_time: "07:00", end_time: "07:45", minutes: 45, is_break: false },
+        { id: 2, period_no: null, label: "Recess", start_time: "07:45", end_time: "08:05", minutes: 20, is_break: true },
+        { id: 3, period_no: 2, label: null, start_time: "08:05", end_time: "08:50", minutes: 45, is_break: false },
+      ] },
+      { id: 2, name: "Friday", days: [5], slots: [{ id: 4, period_no: 1, label: null, start_time: "07:00", end_time: "07:40", minutes: 40, is_break: false }] },
+    ];
+    const entries = [{ id: 1, day: 1, start_time: "07:00", end_time: "07:45", status: "draft", section_subject_id: 50, activity_id: null, subject: "Math", teacher: "Ana", room_id: 1, room: "101" }];
+    const totals = dayTotals({ patterns, entries });
+    expect(totals[0]).toEqual({ day: 1, pattern: "Monday – Thursday", planned: 90, placed: 45 });
+    expect(totals[4]).toEqual({ day: 5, pattern: "Friday", planned: 40, placed: 0 });
+  });
+});
+
+describe("the Senior High blocks in the plotter (Nov 22, 2026)", () => {
+  const shs = (days, asyncMinutes) => ({ ...loading(days * 120 + asyncMinutes, null), target: { sessions: 2, minutes: 240, async_minutes: 90 }, days_placed: days, scheduled_async_minutes: asyncMinutes });
+
+  it("counts face-to-face blocks and the asynchronous session apart, and says what is missing", () => {
+    expect(progressText(shs(1, 0))).toBe("1 of 2 F2F blocks · 0 of 90 async mins · 1 more F2F block and the async session");
+    expect(progressText(shs(2, 0))).toBe("2 of 2 F2F blocks · 0 of 90 async mins · the async session");
+    expect(isComplete(shs(2, 0))).toBe(false);
+    expect(progressPercent(shs(2, 0))).toBe(67);
+  });
+
+  it("is complete with 2 blocks and the 90-minute asynchronous session", () => {
+    expect(isComplete(shs(2, 90))).toBe(true);
+    expect(progressText(shs(2, 90))).toBe("2 of 2 F2F blocks · 90 of 90 async mins · Complete");
+    expect(progressPercent(shs(2, 90))).toBe(100);
+  });
+
+  it("shows Homeroom (no asynchronous session) by its one block, and when it is over 60 minutes", () => {
+    const homeroom = { ...loading(120, 60), target: { sessions: 1, minutes: 60, async_minutes: 0 }, days_placed: 1, scheduled_async_minutes: 0 };
+    expect(progressText(homeroom)).toBe("1 of 1 F2F block · Over by 60 mins");
+  });
+});
+
+describe("Homeroom in a longer period (Nov 22, 2026)", () => {
+  const block = { id: 9, period_no: 1, label: null, start_time: "06:00", end_time: "08:00", minutes: 120, is_break: false };
+  const homeroom = (scheduled) => ({ ...loading(scheduled, 60), subject: "Homeroom Guidance" });
+
+  it("takes only its 60 minutes from the start of a 120-minute block", () => {
+    expect(classMinutes(homeroom(0), block)).toBe(60);
+    expect(classEnd(homeroom(0), block)).toBe("07:00");
+    expect(classMinutes(loading(0, null), block)).toBe(120);
+    expect(classEnd(loading(0, null), block)).toBe("08:00");
+  });
+
+  it("is offered the block while none of it is placed, and not once it is", () => {
+    const free = [{ slot_id: 9, minutes: 120, free_days: [1, 2], busy: [] }];
+    const patterns = [{ id: 1, name: "Monday – Friday", days: [1, 2, 3, 4, 5], slots: [block] }];
+    expect(fittingPeriods({ patterns, loading: homeroom(0), free }).map(({ slot }) => slot.id)).toEqual([9]);
+    expect(fittingPeriods({ patterns, loading: homeroom(60), free })).toEqual([]);
   });
 });

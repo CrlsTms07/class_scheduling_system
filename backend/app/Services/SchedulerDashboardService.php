@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Activity;
 use App\Models\Building;
-use App\Models\DayPattern;
 use App\Models\Room;
 use App\Models\SchoolTerm;
 use App\Models\Section;
@@ -64,8 +63,10 @@ class SchedulerDashboardService
     }
 
     /**
-     * The steps of making a schedule, from the start, each with how far along it is:
-     * 1 Rooms, 2 Bell schedule, 3 Subjects and sections, 4 Teachers, 5 Load Distribution, 6 Plot.
+     * The steps of making a schedule, in the order of the Setup menu, each with how far along it is
+     * (one order everywhere, after the beneficiary's review, Nov 21, 2026): 1 Teachers, 2 Subjects &
+     * Class Hours, 3 Rooms, 4 Sections, 5 Teacher Loading, 6 Plot and submit. Each step needs only
+     * the ones before it: a section needs its adviser (a teacher) and its room.
      *
      * @param  array<int, int>  $scope
      * @return array<int, array{key: string, done: bool, counts: array<string, int>}>
@@ -75,83 +76,62 @@ class SchedulerDashboardService
         $models = Section::whereIn('id', $sections->pluck('id'))->get();
 
         $subjects = Subject::where('school_year_id', $term->school_year_id)
-            ->whereIn('grade_level_id', $scope)
+            ->where(fn ($query) => $query->whereNull('grade_level_id')->orWhereIn('grade_level_id', $scope))
             ->where('is_active', true)
             ->where(fn ($query) => $query->whereNull('term_no')->orWhere('term_no', $term->term_no))
             ->get();
 
-        // Every subject each section should have this term, against those with a teacher.
+        // What each section should have this term: the subjects made for its grade (before Nov 21,
+        // 2026) plus those added to it. Done when every section has subjects and all have a teacher.
+        $loadedRows = DB::table('section_subjects')
+            ->join('subjects', 'subjects.id', '=', 'section_subjects.subject_id')
+            ->where('section_subjects.term_id', $term->id)
+            ->whereIn('section_subjects.section_id', $models->pluck('id'))
+            ->get(['section_subjects.section_id', 'subjects.grade_level_id']);
         $needed = $models->sum(fn (Section $section) => $subjects
             ->where('grade_level_id', $section->grade_level_id)
             ->filter(fn (Subject $subject) => $subject->track_id === null || $subject->track_id === $section->track_id)
-            ->count());
-        $loaded = DB::table('section_subjects')
-            ->where('term_id', $term->id)
-            ->whereIn('section_id', $models->pluck('id'))
-            ->count();
-
-        $teacherIds = DB::table('section_subjects')
-            ->where('term_id', $term->id)
-            ->whereIn('section_id', $models->pluck('id'))
-            ->distinct()
-            ->pluck('teacher_id');
-        $overHours = DB::table('section_subjects')
-            ->join('subjects', 'subjects.id', '=', 'section_subjects.subject_id')
-            ->join('teachers', 'teachers.id', '=', 'section_subjects.teacher_id')
-            ->where('section_subjects.term_id', $term->id)
-            ->whereIn('section_subjects.teacher_id', $teacherIds)
-            ->groupBy('teachers.id', 'teachers.max_hours_per_week')
-            ->havingRaw('SUM(subjects.minutes_per_week) > teachers.max_hours_per_week * 60')
-            ->select('teachers.id')
-            ->get()
-            ->count();
+            ->count()) + $loadedRows->whereNull('grade_level_id')->count();
+        $loaded = $loadedRows->count();
+        $everySectionLoaded = $models->every(fn (Section $section) => $loadedRows->contains('section_id', $section->id));
 
         $teachers = Teacher::where('personnel_type', 'teaching')->where('is_active', true)->count();
         $started = $sections->where('status', '<>', 'not_started')->count();
         $submitted = $sections->whereIn('status', ['pending', 'approved'])->count();
 
-        // The bell schedules of the departments in the user's scope (JHS, SHS), with their periods.
-        // Like the Admin's setup checklist, only a department that has sections needs one; before any
-        // section exists, every department in scope is counted.
-        $levels = DB::table('grade_levels')->whereIn('id', $scope)->distinct()->pluck('level');
-        $levelsWithSections = DB::table('sections')
-            ->join('grade_levels', 'grade_levels.id', '=', 'sections.grade_level_id')
-            ->where('sections.school_year_id', $term->school_year_id)
-            ->whereIn('sections.grade_level_id', $scope)
-            ->distinct()
-            ->pluck('grade_levels.level');
-        $levels = $levelsWithSections->isNotEmpty() ? $levelsWithSections : $levels;
-        $patterns = DayPattern::where('school_year_id', $term->school_year_id)->whereIn('level', $levels)->withCount('timeSlots')->get();
-        $bellLevels = $patterns->where('time_slots_count', '>', 0)->pluck('level')->unique();
+        $rooms = [
+            'key' => 'rooms',
+            'done' => Room::where('is_active', true)->visibleTo($user)->exists(),
+            'counts' => [
+                'rooms' => Room::where('is_active', true)->visibleTo($user)->count(),
+                'buildings' => Building::visibleTo($user)->count(),
+            ],
+        ];
 
         return [
-            [
-                'key' => 'rooms',
-                'done' => Room::where('is_active', true)->visibleTo($user)->exists(),
-                'counts' => [
-                    'rooms' => Room::where('is_active', true)->visibleTo($user)->count(),
-                    'buildings' => Building::visibleTo($user)->count(),
-                ],
-            ],
-            [
-                'key' => 'bell',
-                'done' => $levels->isNotEmpty() && $levels->diff($bellLevels)->isEmpty(),
-                'counts' => ['patterns' => $patterns->count(), 'departments' => $levels->count(), 'ready' => $bellLevels->count()],
-            ],
+            ['key' => 'teachers', 'done' => $teachers > 0, 'counts' => ['teachers' => $teachers]],
             [
                 'key' => 'subjects',
-                'done' => $subjects->isNotEmpty() && $models->isNotEmpty(),
+                'done' => $subjects->isNotEmpty(),
                 'counts' => [
                     'subjects' => $subjects->count(),
                     'activities' => Activity::where('school_year_id', $term->school_year_id)->visibleTo($user)->count(),
-                    'sections' => $models->count(),
                 ],
             ],
-            ['key' => 'teachers', 'done' => $teachers > 0, 'counts' => ['teachers' => $teachers]],
+            $rooms,
+            [
+                'key' => 'sections',
+                'done' => $models->isNotEmpty() && $models->every(fn (Section $section) => $section->adviser_id !== null && $section->home_room_id !== null),
+                'counts' => [
+                    'sections' => $models->count(),
+                    'without_adviser' => $models->whereNull('adviser_id')->count(),
+                    'without_room' => $models->whereNull('home_room_id')->count(),
+                ],
+            ],
             [
                 'key' => 'loading',
-                'done' => $needed > 0 && $loaded >= $needed,
-                'counts' => ['loaded' => $loaded, 'needed' => $needed, 'over_hours' => $overHours],
+                'done' => $models->isNotEmpty() && $everySectionLoaded && $loaded >= $needed,
+                'counts' => ['loaded' => $loaded, 'needed' => $needed],
             ],
             [
                 'key' => 'plot',
@@ -175,13 +155,12 @@ class SchedulerDashboardService
                 $section['status'] === 'rejected' => 'revise',
                 $section['status'] === 'draft' => 'submit',
                 $section['status'] !== 'not_started' => 'none',
-                ! DayPattern::forSection($models[$section['id']])->exists() => 'no_bell_schedule',
                 ! in_array($section['id'], $loadedSectionIds, true) => 'add_loading',
                 default => 'plot',
             };
         });
 
-        return collect(['revise', 'no_bell_schedule', 'add_loading', 'plot', 'submit'])
+        return collect(['revise', 'add_loading', 'plot', 'submit'])
             ->filter(fn (string $key) => $grouped->has($key))
             ->map(fn (string $key) => [
                 'key' => $key,

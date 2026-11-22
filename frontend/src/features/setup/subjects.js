@@ -1,22 +1,26 @@
 // @ts-check
 /**
- * Step 3 of the setup: Subjects of this school year (per grade, per term for Senior High, with
- * minutes per week), and Activities such as Flag Ceremony. Subjects belong to one school year, so
- * a new curriculum never changes past schedules.
+ * Step 2 of the setup: Subjects of this school year, names only (beneficiary review, Nov 21, 2026:
+ * no grade and no typed minutes), with Class Hours as the second tab of the same step. The Senior
+ * High details (term, track, type) and the Tracks list are the Admin's only; a Chairperson or Master
+ * Teacher just lists names. Activities are chosen or typed in the class form while plotting.
+ * Subjects belong to one school year, so a new curriculum never changes past schedules.
  */
 import { h, replace } from "@/lib/dom.js";
 import { icon } from "@/components/icons.js";
-import { dataList, editButton } from "@/components/data-list.js";
 import { openFormDialog } from "@/components/form-dialog.js";
 import { openListEditor } from "@/components/list-editor.js";
 import { skeletonList } from "@/components/loading.js";
 import { emptyState, noMatches, pageHeader } from "@/components/page-header.js";
+import { confirmAction } from "@/components/dialog.js";
 import { searchableSelect } from "@/components/searchable-select.js";
+import { toast } from "@/components/toast.js";
 import { errorMessage } from "@/api/client.js";
 import { changeRecord, getRecords } from "@/api/records.js";
 import { watch } from "@/state/cache.js";
 import { session } from "@/state/session.js";
 import { termState } from "@/state/term.js";
+import { subjectTabs } from "./subject-tabs.js";
 
 const TYPES = { core: "Core", elective: "Elective", other: "Other" };
 
@@ -28,7 +32,7 @@ export async function render(container) {
     return;
   }
   const isAdmin = session.user?.role === "super_admin";
-  const ui = { search: "", grade: "", term: "" };
+  const ui = { search: "", term: "" };
   const content = h("div", { class: "space-y-5" }, skeletonList(4));
   /** @type {any} */
   let options = { grade_levels: [], tracks: [], terms: [] };
@@ -38,43 +42,77 @@ export async function render(container) {
   const subjectForm = async (/** @type {any} */ subject = null) => {
     // The choices are loaded first, so a quick tap never opens an empty form.
     options = await getRecords(`/school-years/${year.id}/subject-options`);
-    // Names already used this school year (any grade), to pick from; a new name can still be typed.
-    const known = (await getRecords(`/school-years/${year.id}/subjects`)).map((/** @type {any} */ item) => String(item.name));
-    const names = [...new Set([...known, ...(subject ? [subject.name] : [])])].sort((a, b) => a.localeCompare(b));
+    const others = (await getRecords(`/school-years/${year.id}/subjects`)).filter((/** @type {any} */ item) => item.id !== subject?.id);
+    /** The same name for the same time of the year and track is a repeat: said while typing. */
+    const repeatOf = (/** @type {string} */ name, /** @type {Record<string, any>} */ values) => {
+      const key = (name ?? "").trim().toLowerCase();
+      const termNo = isAdmin ? (values.term_no === "year" ? null : Number(values.term_no)) : null;
+      const trackId = isAdmin && values.track_id ? Number(values.track_id) : null;
+      return key ? others.find((/** @type {any} */ item) => item.name.trim().toLowerCase() === key && item.term_no === termNo && (item.track_id ?? null) === trackId && (!isAdmin || !item.level || !values.level || item.level === values.level)) : undefined;
+    };
     openFormDialog({
       title: subject ? `Edit ${subject.name}` : "Add a subject",
-      description: subject?.locked_reason ? `${subject.locked_reason} Its grade, track and time of the year can no longer change.` : `For SY ${year.name}. Tracks and types apply to Senior High only.`,
+      description: subject?.locked_reason ? `${subject.locked_reason} Its time of the year and track can no longer change.` : `For SY ${year.name}. Just the subject: add it to each section, with its teacher, in Teacher Loading. The minutes are counted from the schedule.`,
       fields: [
-        { name: "name", label: "Subject name", type: "select", required: true, value: subject?.name ?? "", options: names.map((name) => ({ value: name, label: name })), localCreate: true, onCreate: async (typed) => ({ value: typed.trim(), label: typed.trim() }), help: "Pick a subject already in the list, or type a new name and choose Use." },
+        { name: "name", label: "Subject name", required: true, value: subject?.name ?? "", help: "Like Mathematics or Filipino.", check: (value, values) => (repeatOf(value, values) ? `${value.trim()} is already in the list.` : value.trim().length > 100 ? "Use at most 100 characters." : null) },
         { name: "code", label: "Code", value: subject?.code ?? "" },
-        { name: "grade_level_id", label: "Grade level", type: "select", required: true, value: subject?.grade_level_id ?? "", disabled: !!subject?.locked_reason, options: options.grade_levels.map((/** @type {any} */ grade) => ({ value: grade.id, label: `Grade ${grade.grade} (${grade.level === "JHS" ? "Junior High" : "Senior High"})` })) },
-        { name: "minutes_per_week", label: "Minutes per week", type: "number", required: true, min: 1, max: 3000, value: subject?.minutes_per_week, help: "Homeroom Guidance is 60." },
-        { name: "term_no", label: `Taken in which ${year.term_label.toLowerCase()}`, type: "select", value: subject?.term_no ?? "", disabled: !!subject?.locked_reason, options: [{ value: "", label: "Whole year" }, ...options.terms.map((/** @type {any} */ term) => ({ value: term.term_no, label: term.name }))] },
-        { name: "track_id", label: "Track (Senior High)", type: "select", value: subject?.track_id ?? "", disabled: !!subject?.locked_reason, options: [{ value: "", label: "All tracks" }, ...options.tracks.map((/** @type {any} */ track) => ({ value: track.id, label: track.name }))] },
-        { name: "subject_type", label: "Type (Senior High)", type: "select", required: true, value: subject?.subject_type ?? "core", options: Object.entries(TYPES).map(([value, label]) => ({ value, label })) },
+        // The Senior High details are the Admin's (team decision, Nov 21, 2026).
+        ...(isAdmin
+          ? [
+              { name: "level", label: "For", type: /** @type {const} */ ("select"), required: true, value: subject?.level ?? "", help: "Junior High or Senior High. A Chairperson sees only Junior High subjects; the Master Teacher only Senior High ones.", options: [{ value: "JHS", label: "Junior High" }, { value: "SHS", label: "Senior High" }] },
+              { name: "term_no", label: `Taken in which ${year.term_label.toLowerCase()}`, type: /** @type {const} */ ("select"), required: true, value: subject ? (subject.term_no ?? "year") : "year", disabled: !!subject?.locked_reason, help: "Whole year for Junior High; Senior High subjects may be for one part only.", options: [{ value: "year", label: "Whole year" }, ...options.terms.map((/** @type {any} */ term) => ({ value: term.term_no, label: term.name }))] },
+              { name: "track_id", label: "Track", type: /** @type {const} */ ("select"), value: subject?.track_id ?? "", disabled: !!subject?.locked_reason, help: "For Senior High only, like Academic or TechPro. Leave it on All tracks for Junior High.", check: (/** @type {any} */ value, /** @type {any} */ values) => (value && values.level === "JHS" ? "Only Senior High subjects have a track. Choose All tracks." : null), options: [{ value: "", label: "All tracks" }, ...options.tracks.map((/** @type {any} */ track) => ({ value: track.id, label: track.name }))] },
+              { name: "subject_type", label: "Type", type: /** @type {const} */ ("select"), required: true, value: subject?.subject_type ?? "core", help: "For Senior High only. Junior High subjects are Core.", options: Object.entries(TYPES).map(([value, label]) => ({ value, label })) },
+            ]
+          : []),
         { name: "is_priority", label: "Priority (placed first, like PE and Homeroom)", type: "checkbox", value: subject?.is_priority ?? false },
         { name: "is_active", label: "Offered this school year", type: "checkbox", value: subject?.is_active ?? true },
       ],
       submitLabel: subject ? "Save changes" : "Add subject",
       onSubmit: async (values) => {
-        const grade = options.grade_levels.find((/** @type {any} */ item) => item.id === Number(values.grade_level_id));
-        const isSeniorHigh = grade?.level === "SHS";
+        // No grade and no minutes (beneficiary review, Nov 21, 2026): the grade comes from the
+        // section in Teacher Loading, and the minutes from the schedule.
         const body = {
-          grade_level_id: Number(values.grade_level_id),
-          track_id: isSeniorHigh && values.track_id ? Number(values.track_id) : null,
-          term_no: values.term_no === "" || values.term_no === null ? null : Number(values.term_no),
+          ...(isAdmin ? { level: values.level } : {}),
+          track_id: isAdmin && values.track_id ? Number(values.track_id) : (subject?.track_id ?? null),
+          term_no: isAdmin ? (values.term_no === "year" ? null : Number(values.term_no)) : (subject?.term_no ?? null),
           code: values.code || null,
-          name: values.name,
-          subject_type: isSeniorHigh ? values.subject_type : "core",
-          minutes_per_week: Number(values.minutes_per_week),
+          name: values.name.trim(),
+          subject_type: isAdmin ? values.subject_type : (subject?.subject_type ?? "core"),
           is_priority: values.is_priority,
           is_active: values.is_active,
         };
         await changeRecord(subject ? `/subjects/${subject.id}` : `/school-years/${year.id}/subjects`, subject ? "PUT" : "POST", body);
-        return `${values.name} was ${subject ? "saved" : "added"}.`;
+        return `${body.name} was ${subject ? "saved" : "added"}.`;
       },
-      remove: subject ? { label: "Delete this subject", message: `This deletes ${subject.name} from SY ${year.name}.`, blockedReason: subject.locked_reason, run: async () => { await changeRecord(`/subjects/${subject.id}`, "DELETE"); return `${subject.name} was deleted.`; } } : undefined,
+      remove: subject ? { label: "Delete this subject", message: deleteMessage(subject), blockedReason: subject.delete_blocked_reason, run: async () => { await changeRecord(subjectDeleteUrl(subject), "DELETE"); return `${subject.name} was deleted.`; } } : undefined,
     });
+  };
+
+  /**
+   * What deleting says: a subject with teacher loading but no class on a schedule goes with its
+   * loading, said in the confirmation (Nov 22, 2026).
+   * @param {any} subject
+   */
+  const deleteMessage = (subject) =>
+    subject.loading_count > 0
+      ? `It is taken out of SY ${year.name}, and its teacher loading in ${subject.loading_count} ${subject.loading_count === 1 ? "section" : "sections"} is removed too. No class is on a schedule yet, so nothing else is lost.`
+      : `It is taken out of SY ${year.name}.`;
+  const subjectDeleteUrl = (/** @type {any} */ subject) => `/subjects/${subject.id}${subject.loading_count > 0 ? "?with_loading=1" : ""}`;
+
+  /** Delete straight from the list (a subject already on a schedule stays, and says why). */
+  const deleteSubject = async (/** @type {any} */ subject) => {
+    if (subject.delete_blocked_reason) {
+      toast.error(`${subject.name} cannot be deleted: ${subject.delete_blocked_reason} Remove its classes first, or mark it as not offered.`);
+      return;
+    }
+    if (!(await confirmAction({ title: `Delete ${subject.name}?`, message: deleteMessage(subject), confirmLabel: "Yes, delete" }))) return;
+    try {
+      await changeRecord(subjectDeleteUrl(subject), "DELETE");
+      toast.success(`${subject.name} was deleted.`);
+    } catch (error) {
+      toast.error(error);
+    }
   };
 
   // Senior High tracks, shared by every school year. Only the Admin deletes one, and only when no
@@ -96,24 +134,6 @@ export async function render(container) {
       },
     });
 
-  const activityForm = (/** @type {any} */ activity = null) =>
-    openFormDialog({
-      title: activity ? `Edit ${activity.name}` : "Add an activity",
-      description: "Flag Ceremony, Catch-up Friday and the like. On the schedule, choose Activity on a period.",
-      fields: [
-        { name: "name", label: "Name", required: true, value: activity?.name },
-        { name: "code", label: "Short code", value: activity?.code ?? "", help: "Like FLAG" },
-        ...(isAdmin ? [{ name: "department", label: "Department", type: /** @type {const} */ ("select"), value: activity?.department ?? "", options: [{ value: "", label: "School-wide" }, { value: "JHS", label: "Junior High" }, { value: "SHS", label: "Senior High" }] }] : []),
-      ],
-      submitLabel: activity ? "Save changes" : "Add activity",
-      onSubmit: async (values) => {
-        const body = { name: values.name, code: values.code || null, ...(isAdmin ? { department: values.department || null } : {}) };
-        await changeRecord(activity ? `/activities/${activity.id}` : `/school-years/${year.id}/activities`, activity ? "PUT" : "POST", body);
-        return `${values.name} was ${activity ? "saved" : "added"}.`;
-      },
-      remove: activity ? { label: "Delete this activity", message: `This deletes ${activity.name}.`, blockedReason: activity.in_use ? "It is on a schedule." : null, run: async () => { await changeRecord(`/activities/${activity.id}`, "DELETE"); return `${activity.name} was deleted.`; } } : undefined,
-    });
-
   const searchInput = /** @type {HTMLInputElement} */ (h("input", { type: "search", class: "input", placeholder: "Name, code or track", "aria-label": "Search subjects", oninput: () => { ui.search = searchInput.value; draw(); } }));
 
   replace(
@@ -121,60 +141,88 @@ export async function render(container) {
     h(
       "div",
       { class: "space-y-5 p-4 sm:p-6" },
-      pageHeader({ icon: "book", title: "Subjects", description: `Step 3 of the setup: the curriculum of SY ${year.name}, for your grade levels.`, crumbs: [{ label: "Home", to: "/dashboard" }, { label: "Subjects" }], actions: [h("button", { type: "button", class: "btn btn-outline", onclick: editTracks }, icon("layers"), "Tracks"), h("button", { type: "button", class: "btn btn-primary", onclick: () => subjectForm() }, icon("plus"), "Add subject")] }),
+      pageHeader({ icon: "book", title: "Subjects & Class Hours", description: `Step 2 of the setup: the subjects of SY ${year.name}, names only, and the class hours.`, crumbs: [{ label: "Home", to: "/dashboard" }, { label: "Subjects" }], actions: [isAdmin ? h("button", { type: "button", class: "btn btn-outline", onclick: editTracks }, icon("layers"), "Tracks (Senior High)") : null, h("button", { type: "button", class: "btn btn-primary", onclick: () => subjectForm() }, icon("plus"), "Add subject")] }),
+      subjectTabs("subjects"),
       content,
     ),
   );
 
+  /**
+   * The subjects as cards: the name first, its code and badges under it, and Edit and Delete as
+   * icon buttons (44 px). The Admin also sees the Senior High details as small chips.
+   * @param {any[]} subjects
+   */
+  const subjectCards = (subjects) =>
+    h(
+      "section",
+      { "aria-label": "Subjects", class: "space-y-3" },
+      h("p", { class: "text-sm text-muted-foreground", "aria-live": "polite" }, `${subjects.length} ${subjects.length === 1 ? "subject" : "subjects"} in SY ${year.name}`),
+      h(
+        "ul",
+        { class: "grid gap-3 sm:grid-cols-2 xl:grid-cols-3" },
+        subjects.map((subject) => {
+          const chip = (/** @type {string} */ text, /** @type {string} */ tone = "bg-surface-muted text-muted-foreground") => h("span", { class: `badge ${tone}` }, text);
+          return h(
+            "li",
+            { class: `card group flex items-start gap-3 p-4 transition-colors hover:border-brand/40 ${subject.is_active ? "" : "opacity-70"}` },
+            h("span", { class: "flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-base font-bold text-brand", "aria-hidden": "true" }, subject.name.trim().charAt(0).toUpperCase()),
+            h(
+              "div",
+              { class: "min-w-0 flex-1 space-y-1.5" },
+              h("p", { class: "truncate font-semibold leading-tight", title: subject.name }, subject.name),
+              h("p", { class: "text-small text-muted-foreground" }, subject.code ? `Code: ${subject.code}` : "No code"),
+              h(
+                "div",
+                { class: "flex flex-wrap gap-1" },
+                subject.is_priority ? chip("Priority", "bg-sky-100 text-sky-900 dark:bg-sky-900 dark:text-sky-100") : null,
+                subject.is_active ? null : chip("Not offered"),
+                subject.grade ? h("span", { class: "badge bg-surface-muted text-muted-foreground", title: "Made for one grade before Nov 21, 2026" }, `Grade ${subject.grade} only`) : null,
+                isAdmin ? chip(subject.level === "SHS" ? "Senior High" : subject.level === "JHS" ? "Junior High" : "Level not set", subject.level ? "bg-brand-soft text-brand" : "bg-amber-100 text-amber-900 dark:bg-amber-900 dark:text-amber-100") : null,
+                isAdmin ? chip(termName(subject.term_no)) : null,
+                isAdmin && subject.track ? chip(`${subject.track} (SHS)`) : null,
+                isAdmin && subject.subject_type !== "core" ? chip(TYPES[/** @type {keyof typeof TYPES} */ (subject.subject_type)]) : null,
+              ),
+            ),
+            h(
+              "div",
+              { class: "flex shrink-0 gap-1" },
+              h("button", { type: "button", class: "btn btn-quiet size-11 p-0", "aria-label": `Edit ${subject.name}`, title: "Edit", onclick: () => subjectForm(subject) }, icon("pencil", "size-4")),
+              h("button", { type: "button", class: "btn btn-quiet size-11 p-0 text-danger", "aria-label": `Delete ${subject.name}`, title: subject.delete_blocked_reason ? "It is on a schedule, so it stays" : "Delete", onclick: () => deleteSubject(subject) }, icon("trash", "size-4")),
+            ),
+          );
+        }),
+      ),
+    );
+
   const draw = async () => {
     try {
-      const [subjects, activities] = await Promise.all([getRecords(`/school-years/${year.id}/subjects`), getRecords(`/school-years/${year.id}/activities`)]);
+      const subjects = await getRecords(`/school-years/${year.id}/subjects`);
       options = await getRecords(`/school-years/${year.id}/subject-options`);
       const words = ui.search.trim().toLowerCase();
-      const shown = subjects.filter((/** @type {any} */ subject) => (!ui.grade || subject.grade === Number(ui.grade)) && (ui.term === "" || String(subject.term_no ?? "year") === ui.term) && (!words || `${subject.name} ${subject.code ?? ""} ${subject.track ?? ""}`.toLowerCase().includes(words)));
-      const grades = [...new Set(subjects.map((/** @type {any} */ subject) => subject.grade))].sort((a, b) => a - b);
+      const shown = subjects.filter((/** @type {any} */ subject) => (ui.term === "" || String(subject.term_no ?? "year") === ui.term) && (!words || `${subject.name} ${subject.code ?? ""} ${subject.track ?? ""}`.toLowerCase().includes(words)));
 
       replace(
         content,
         h(
           "div",
-          { class: "card grid gap-3 p-3 sm:grid-cols-3" },
+          { class: `card grid gap-3 p-3 ${isAdmin ? "sm:grid-cols-2" : ""}` },
           h("div", { class: "space-y-1" }, h("label", { class: "field-label" }, "Search"), searchInput),
-          searchableSelect({ label: "Grade level", value: ui.grade, options: [{ value: "", label: "All grades" }, ...grades.map((grade) => ({ value: String(grade), label: `Grade ${grade}` }))], onChange: (value) => { ui.grade = String(value); draw(); } }),
-          searchableSelect({ label: "When", value: ui.term, options: [{ value: "", label: "Any time" }, { value: "year", label: "Whole year" }, ...options.terms.map((/** @type {any} */ term) => ({ value: String(term.term_no), label: term.name }))], onChange: (value) => { ui.term = String(value); draw(); } }),
+          !isAdmin ? null : searchableSelect({ label: "When", value: ui.term, options: [{ value: "", label: "Any time" }, { value: "year", label: "Whole year" }, ...options.terms.map((/** @type {any} */ term) => ({ value: String(term.term_no), label: term.name }))], onChange: (value) => { ui.term = String(value); draw(); } }),
         ),
         subjects.length === 0
-          ? emptyState({ title: "No subjects yet", text: `Add the subjects of SY ${year.name}, with their minutes per week.`, action: h("button", { type: "button", class: "btn btn-primary", onclick: () => subjectForm() }, icon("plus"), "Add subject") })
+          ? emptyState({ title: "No subjects yet", text: `Add the subjects of SY ${year.name}: just their names. Then add each to its sections in Teacher Loading.`, action: h("button", { type: "button", class: "btn btn-primary", onclick: () => subjectForm() }, icon("plus"), "Add subject") })
           : shown.length === 0
             ? noMatches({
                 noun: "subject",
                 search: ui.search,
-                filters: [ui.grade ? `Grade ${ui.grade}` : null, ui.term === "year" ? "Whole year" : ui.term ? termName(Number(ui.term)) : null],
+                filters: [ui.term === "year" ? "Whole year" : ui.term ? termName(Number(ui.term)) : null],
                 onClear: () => {
-                  Object.assign(ui, { search: "", grade: "", term: "" });
+                  Object.assign(ui, { search: "", term: "" });
                   searchInput.value = "";
                   draw();
                 },
               })
-            : dataList({
-                label: "Subjects",
-                items: shown,
-                columns: [
-                  { label: "Subject", primary: true, cell: (/** @type {any} */ subject) => h("span", null, subject.name, subject.is_priority ? h("span", { class: "badge ml-2 bg-sky-100 text-sky-900 dark:bg-sky-900 dark:text-sky-100" }, "Priority") : null, subject.is_active ? null : h("span", { class: "badge ml-2 bg-surface-muted" }, "Not offered")) },
-                  { label: "Grade", cell: (/** @type {any} */ subject) => String(subject.grade) },
-                  { label: "When", cell: (/** @type {any} */ subject) => termName(subject.term_no) },
-                  { label: "Track", cell: (/** @type {any} */ subject) => subject.track ?? "–" },
-                  { label: "Type", cell: (/** @type {any} */ subject) => (subject.level === "SHS" ? TYPES[/** @type {keyof typeof TYPES} */ (subject.subject_type)] : "–") },
-                  { label: "Per week", cell: (/** @type {any} */ subject) => `${subject.minutes_per_week} mins` },
-                ],
-                actions: (/** @type {any} */ subject) => editButton(subject.name, () => subjectForm(subject)),
-              }),
-        h(
-          "section",
-          { "aria-label": "Activities", class: "card space-y-3 p-4" },
-          h("div", { class: "flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between" }, h("div", null, h("h2", { class: "font-semibold text-accent" }, "Activities"), h("p", { class: "text-small text-muted-foreground" }, "Flag Ceremony, Catch-up Friday and the like. On the schedule, choose Activity on a period, then apply it to one section, a grade level or all sections.")), h("button", { type: "button", class: "btn btn-outline", onclick: () => activityForm() }, icon("plus"), "Add activity")),
-          activities.length === 0 ? h("p", { class: "text-sm text-muted-foreground" }, "No activities yet.") : h("ul", { class: "flex flex-wrap gap-2" }, activities.map((/** @type {any} */ activity) => h("li", { class: "flex items-center gap-2 rounded-lg border bg-surface-muted px-3 py-1 text-sm" }, h("span", { class: "font-medium" }, activity.name), activity.code ? h("span", { class: "text-small text-muted-foreground" }, activity.code) : null, h("span", { class: "badge bg-surface" }, activity.department ? { JHS: "Junior High", SHS: "Senior High" }[/** @type {"JHS" | "SHS"} */ (activity.department)] : "School-wide"), activity.can_edit === false ? null : editButton(activity.name, () => activityForm(activity))))),
-        ),
+            : subjectCards(shown),
       );
     } catch (error) {
       replace(content, h("p", { role: "alert", class: "text-danger" }, errorMessage(error)));

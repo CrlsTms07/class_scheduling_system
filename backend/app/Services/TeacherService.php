@@ -32,7 +32,7 @@ class TeacherService
     public function listFor(SchoolTerm $term, ?User $viewer = null): array
     {
         $viewer ??= auth()->user();
-        $readOnly = $viewer ? $this->otherDepartmentOnly($term, $viewer)->flip() : collect();
+        $readOnly = $viewer ? $this->viewOnlyFor($term, $viewer)->flip() : collect();
 
         $loads = DB::table('section_subjects')
             ->where('term_id', $term->id)
@@ -70,9 +70,14 @@ class TeacherService
             ->groupBy('teacher_id')
             ->map(fn ($rows) => $rows->pluck('level')->unique()->sort()->values()->all());
 
-        return Teacher::orderBy('last_name')
-            ->orderBy('first_name')
+        $departmentLevels = DB::table('departments')->pluck('level', 'id');
+
+        // Teaching personnel only (team decision, Nov 21, 2026). Everyone sees every teacher (team
+        // decision, Nov 22, 2026); a Chairperson or Master Teacher edits only those of their own level.
+        return Teacher::where('personnel_type', 'teaching')
             ->get()
+            ->sortBy(fn (Teacher $teacher) => [$teacher->last_name, $teacher->first_name])
+            ->values()
             ->map(fn (Teacher $teacher) => [
                 'id' => $teacher->id,
                 'personnel_type' => $teacher->personnel_type,
@@ -81,19 +86,21 @@ class TeacherService
                 'middle_name' => $teacher->middle_name,
                 'last_name' => $teacher->last_name,
                 'suffix' => $teacher->suffix,
-                'display_name' => $teacher->display_name,
                 'printed_name' => $teacher->printedName(),
                 'department_id' => $teacher->department_id,
                 'department' => $departments[$teacher->department_id] ?? null,
+                'department_level' => $departmentLevels[$teacher->department_id] ?? null,
+                // Where the teacher belongs: their department's level, or where they teach when the
+                // department has no level yet (shown beside the name, Nov 22, 2026).
+                'home_level' => $departmentLevels[$teacher->department_id] ?? (count($levels->get($teacher->id, [])) === 1 ? $levels->get($teacher->id)[0] : null),
                 'designation_id' => $teacher->designation_id,
                 'designation' => $designations[$teacher->designation_id] ?? null,
                 'shift' => $teacher->shift,
                 'max_subjects' => $teacher->max_subjects,
-                'max_hours_per_week' => $teacher->max_hours_per_week,
                 'is_active' => $teacher->is_active,
                 'account_email' => $accounts[$teacher->user_id] ?? null,
                 'advisory' => $advisories->get($teacher->id)?->labelFor($viewer),
-                // Only the Admin edits a teacher who teaches only in the other department.
+                // A Chairperson edits Junior High teachers, the Master Teacher Senior High ones, the Admin all.
                 'can_edit' => ! $readOnly->has($teacher->id),
                 'assigned' => (int) ($loads[$teacher->id] ?? 0),
                 'task_ids' => ($tasks[$teacher->id] ?? collect())->pluck('task_id')->map(fn ($id) => (int) $id)->values(),
@@ -112,10 +119,17 @@ class TeacherService
     /**
      * @return array<string, mixed>
      */
-    public function options(): array
+    public function options(?User $viewer = null): array
     {
+        $own = $viewer?->departmentsInScope();
+
         return [
-            'departments' => DB::table('departments')->orderBy('name')->get(['id', 'name']),
+            // A Chairperson or Master Teacher sees the departments of their own level (and any not
+            // given a level yet); the Admin sees all, with their level (Nov 21, 2026).
+            'departments' => DB::table('departments')
+                ->when($own !== null, fn ($query) => $query->where(fn ($inner) => $inner->whereIn('level', $own)->orWhereNull('level')))
+                ->orderBy('name')
+                ->get(['id', 'name', 'level']),
             'designations' => DB::table('designations')->orderBy('name')->get(['id', 'name']),
             'tasks' => DB::table('teaching_tasks')->orderBy('name')->get(['id', 'name']),
         ];
@@ -124,15 +138,30 @@ class TeacherService
     /**
      * @return array{id: int, name: string}
      */
-    public function addOption(string $type, string $name, User $user): array
+    public function addOption(string $type, string $name, User $user, ?string $level = null): array
     {
         $table = self::OPTION_TABLES[$type];
         $name = trim($name);
-        $id = DB::table($table)->insertGetId(['name' => $name]);
+        $values = ['name' => $name, ...($type === 'departments' ? ['level' => $level] : [])];
+        $id = DB::table($table)->insertGetId($values);
 
-        $this->audit->log($user, 'create', $table, $id, null, ['name' => $name]);
+        $this->audit->log($user, 'create', $table, $id, null, $values);
 
-        return ['id' => $id, 'name' => $name];
+        return ['id' => $id, ...$values];
+    }
+
+    /**
+     * A Chairperson or Master Teacher changes only the departments of their own level.
+     */
+    public function ensureOwnDepartment(string $type, int $id, User $user): void
+    {
+        $own = $user->departmentsInScope();
+        if ($type !== 'departments' || $own === null) {
+            return;
+        }
+
+        $level = DB::table('departments')->where('id', $id)->value('level');
+        abort_if($level !== null && ! in_array($level, $own, true), 403, 'This department belongs to the other department level. The Admin keeps it.');
     }
 
     /**
@@ -224,6 +253,24 @@ class TeacherService
     /**
      * A misspelled department, designation or task can go, but not one that is in use.
      */
+    /**
+     * Renames a department, designation or task (fixes a typo everywhere it is used).
+     *
+     * @return array{id: int, name: string}
+     */
+    public function renameOption(string $type, int $id, string $name, User $user): array
+    {
+        $table = self::OPTION_TABLES[$type];
+        $row = DB::table($table)->where('id', $id)->first();
+        abort_unless($row, 404);
+
+        $name = trim($name);
+        DB::table($table)->where('id', $id)->update(['name' => $name]);
+        $this->audit->log($user, 'update', $table, $id, ['name' => $row->name], ['name' => $name]);
+
+        return ['id' => $id, 'name' => $name];
+    }
+
     public function deleteOption(string $type, int $id, User $user): void
     {
         $table = self::OPTION_TABLES[$type];
@@ -250,12 +297,18 @@ class TeacherService
     /**
      * Only teaching personnel can have subjects or be advisers.
      */
+    /**
+     * An advisory or teacher loading: then the person must stay teaching personnel.
+     */
+    public function hasTeachingWork(Teacher $teacher): bool
+    {
+        return DB::table('sections')->where('adviser_id', $teacher->id)->orWhere('co_adviser_id', $teacher->id)->exists()
+            || DB::table('section_subjects')->where('teacher_id', $teacher->id)->exists();
+    }
+
     private function stopIfTeachingWork(Teacher $teacher): void
     {
-        $hasWork = DB::table('sections')->where('adviser_id', $teacher->id)->orWhere('co_adviser_id', $teacher->id)->exists()
-            || DB::table('section_subjects')->where('teacher_id', $teacher->id)->exists();
-
-        if ($hasWork) {
+        if ($this->hasTeachingWork($teacher)) {
             throw ValidationException::withMessages([
                 'personnel_type' => 'This person has an advisory or teacher loading, so they must stay as teaching personnel.',
             ]);
@@ -269,17 +322,9 @@ class TeacherService
      */
     private function saveDetails(Teacher $teacher, SchoolTerm $term, array $data): void
     {
-        DB::table('teacher_qualifications')->where('teacher_id', $teacher->id)->delete();
-
-        foreach ($data['qualifications'] as $qualification) {
-            DB::table('teacher_qualifications')->insert([
-                'teacher_id' => $teacher->id,
-                'degree_level' => $qualification['degree_level'],
-                'degree' => $qualification['degree'],
-                'major' => $qualification['major'] ?? null,
-                'school' => $qualification['school'] ?? null,
-                'year_completed' => $qualification['year_completed'] ?? null,
-            ]);
+        // A department made before levels takes the level the Admin chose for it (Nov 21, 2026).
+        if (! empty($data['department_level'])) {
+            DB::table('departments')->where('id', $data['department_id'])->whereNull('level')->update(['level' => $data['department_level']]);
         }
 
         DB::table('teacher_tasks')->where('teacher_id', $teacher->id)->where('term_id', $term->id)->delete();
@@ -300,7 +345,37 @@ class TeacherService
     private function recordValues(array $data): array
     {
         // The load limit is one for the whole school, not chosen per teacher.
-        return [...collect($data)->except(['qualifications', 'task_ids', 'max_subjects'])->all(), 'max_subjects' => (int) config('school.max_subjects')];
+        return [...collect($data)->except(['qualifications', 'task_ids', 'max_subjects', 'department_level'])->all(), 'max_subjects' => (int) config('school.max_subjects')];
+    }
+
+    /**
+     * The teachers a Chairperson or Master Teacher may see but not change (team decision, Nov 22,
+     * 2026): those of a department of the other level (a Junior High teacher for the Master Teacher,
+     * a Senior High one for a Chairperson). A teacher whose department has no level yet goes by
+     * where they teach. The Admin changes everyone. Giving a class to a teacher of the other level
+     * stays possible in Teacher Loading ("From Junior High"); only the record is kept by their own side.
+     *
+     * @return \Illuminate\Support\Collection<int, int>
+     */
+    public function viewOnlyFor(SchoolTerm $term, User $viewer): \Illuminate\Support\Collection
+    {
+        $own = $viewer->departmentsInScope();
+        if ($own === null) {
+            return collect();
+        }
+
+        $departmentLevels = DB::table('departments')->pluck('level', 'id');
+        $byClasses = $this->otherDepartmentOnly($term, $viewer)->flip();
+
+        return Teacher::where('personnel_type', 'teaching')
+            ->get(['id', 'department_id'])
+            ->filter(function (Teacher $teacher) use ($own, $departmentLevels, $byClasses) {
+                $level = $departmentLevels[$teacher->department_id] ?? null;
+
+                return $level !== null ? ! in_array($level, $own, true) : $byClasses->has($teacher->id);
+            })
+            ->pluck('id')
+            ->values();
     }
 
     /**

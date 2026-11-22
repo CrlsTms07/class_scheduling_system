@@ -14,7 +14,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;   -- needed for conflict constraints
 CREATE TYPE timerange AS RANGE (subtype = time);
 
 CREATE TYPE school_level    AS ENUM ('JHS', 'SHS');
-CREATE TYPE shift_type      AS ENUM ('AM', 'PM', 'WHOLE_DAY');
+CREATE TYPE shift_type      AS ENUM ('AM', 'PM', 'WHOLE_DAY', 'PART_TIME');  -- PART_TIME: Senior High only
 CREATE TYPE account_status  AS ENUM ('pending', 'active', 'inactive');
 CREATE TYPE personnel_type  AS ENUM ('teaching', 'non_teaching');
 CREATE TYPE subject_type    AS ENUM ('core', 'elective', 'other');
@@ -109,7 +109,9 @@ CREATE TABLE time_slots (
     start_time      TIME NOT NULL,
     end_time        TIME NOT NULL CHECK (end_time > start_time),
     is_break        BOOLEAN NOT NULL DEFAULT false,
+    is_async        BOOLEAN NOT NULL DEFAULT false,  -- SHS asynchronous session: classes need no room
     CHECK (is_break OR period_no IS NOT NULL),
+    CHECK (NOT (is_async AND is_break)),
     EXCLUDE USING gist (day_pattern_id WITH =, timerange(start_time, end_time) WITH &&)
 );
 
@@ -135,8 +137,11 @@ CREATE TABLE rooms (
 
 CREATE TABLE departments (                 -- subject departments: Math, Science, ...
     id              SERIAL PRIMARY KEY,
-    name            VARCHAR(80) UNIQUE NOT NULL
+    name            VARCHAR(80) NOT NULL,
+    level           school_level             -- JHS or SHS (Nov 21, 2026); NULL = not given yet
 );
+CREATE UNIQUE INDEX departments_level_name_unique ON departments (level, LOWER(name)) WHERE level IS NOT NULL;
+CREATE UNIQUE INDEX departments_name_no_level_unique ON departments (LOWER(name)) WHERE level IS NULL;
 
 CREATE TABLE designations (                -- Teacher I–III, Master Teacher I ...
     id    SERIAL PRIMARY KEY,
@@ -197,18 +202,18 @@ CREATE TABLE tracks (                      -- SHS: Academic, TechPro, ...
 CREATE TABLE subjects (                    -- curriculum is per school year (can change yearly)
     id                SERIAL PRIMARY KEY,
     school_year_id    INT NOT NULL REFERENCES school_years(id) ON DELETE RESTRICT,
-    grade_level_id    SMALLINT NOT NULL REFERENCES grade_levels(id) ON DELETE RESTRICT,
+    grade_level_id    SMALLINT REFERENCES grade_levels(id) ON DELETE RESTRICT,     -- NULL = every grade (Nov 21, 2026)
     track_id          INT REFERENCES tracks(id) ON DELETE RESTRICT,  -- NULL = all tracks / JHS
     term_no           SMALLINT,                                      -- NULL = whole year (JHS)
     code              VARCHAR(20),
     name              VARCHAR(100) NOT NULL,
     subject_type      subject_type NOT NULL DEFAULT 'core',
-    minutes_per_week  SMALLINT NOT NULL CHECK (minutes_per_week > 0),  -- Homeroom = 60
+    minutes_per_week  SMALLINT CHECK (minutes_per_week > 0),  -- not typed any more (counted from the schedule)
     is_priority       BOOLEAN NOT NULL DEFAULT false,                  -- PE, Homeroom
     is_active         BOOLEAN NOT NULL DEFAULT true
 );
 CREATE UNIQUE INDEX subjects_unique ON subjects
-    (school_year_id, grade_level_id, COALESCE(track_id, 0), COALESCE(term_no, 0), name);
+    (school_year_id, COALESCE(grade_level_id, 0), COALESCE(track_id, 0), COALESCE(term_no, 0), name);
 
 -- Activities (Flag Ceremony, Catch-up Friday...): they take a period but have no
 -- teacher, room or required minutes. Recess and lunch stay as breaks in time_slots.
@@ -236,6 +241,7 @@ CREATE TABLE sections (
     class_size       SMALLINT CHECK (class_size >= 0),
     UNIQUE (school_year_id, grade_level_id, name),
     co_adviser_id    BIGINT REFERENCES teachers(id) ON DELETE RESTRICT,  -- optional, named on the public schedule
+    strand           VARCHAR(120),                                       -- SHS only, printed after the track
     CHECK (co_adviser_id <> adviser_id),
     UNIQUE (school_year_id, adviser_id)                                  -- 1 advisory per year
 );
@@ -437,14 +443,24 @@ CREATE TABLE trusted_devices (
 -- Helper views
 -- ---------------------------------------------------------------------
 -- Teaching load per teacher per term (4–5 subject limit)
+-- An advisory counts as 1 load (Nov 22, 2026): loads = subjects + 1 when the teacher advises a
+-- section of the term's school year; overloaded past max_subjects (5).
 CREATE VIEW teacher_load AS
 SELECT t.id AS teacher_id, ss.term_id,
-       COUNT(ss.id)                  AS subject_count,
+       COUNT(ss.id)                                  AS subject_count,
        t.max_subjects,
-       COUNT(ss.id) > t.max_subjects AS is_overloaded
+       COUNT(ss.id) + adv.credit > t.max_subjects    AS is_overloaded,
+       adv.credit                                    AS adviser_credit,
+       COUNT(ss.id) + adv.credit                     AS loads
 FROM teachers t
 JOIN section_subjects ss ON ss.teacher_id = t.id
-GROUP BY t.id, ss.term_id, t.max_subjects;
+JOIN school_terms st ON st.id = ss.term_id
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM sections s WHERE s.adviser_id = t.id AND s.school_year_id = st.school_year_id
+    ) THEN 1 ELSE 0 END AS credit
+) adv
+GROUP BY t.id, ss.term_id, t.max_subjects, adv.credit;
 
 -- Scheduled minutes vs required minutes per section subject
 -- (flags e.g. Homeroom Guidance scheduled for more than 60 minutes)

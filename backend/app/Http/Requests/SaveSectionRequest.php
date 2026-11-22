@@ -34,12 +34,25 @@ class SaveSectionRequest extends FormRequest
         return [
             'grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
             'name' => ['required', 'string', 'max:60'],
-            'shift' => ['required', Rule::in(['AM', 'PM', 'WHOLE_DAY'])],
+            'shift' => ['required', Rule::in(['AM', 'PM', 'WHOLE_DAY', 'PART_TIME'])],
             'track_id' => ['nullable', 'integer', 'exists:tracks,id'],
-            'adviser_id' => ['nullable', 'integer', 'exists:teachers,id'],
+            'strand' => ['nullable', 'string', 'max:120'],
+            // Required (team decision, Nov 21, 2026): only the co-adviser and the class size are optional.
+            'adviser_id' => ['required', 'integer', 'exists:teachers,id'],
             'co_adviser_id' => ['nullable', 'integer', 'exists:teachers,id'],
-            'home_room_id' => ['nullable', 'integer', 'exists:rooms,id'],
+            'home_room_id' => ['required', 'integer', 'exists:rooms,id'],
             'class_size' => ['nullable', 'integer', 'between:0,200'],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'adviser_id.required' => 'Choose the adviser of this section.',
+            'home_room_id.required' => 'Choose the room of this section.',
         ];
     }
 
@@ -109,6 +122,23 @@ class SaveSectionRequest extends FormRequest
 
         if ($level === 'JHS' && $this->filled('track_id')) {
             $validator->errors()->add('track_id', 'Only Senior High sections have a track.');
+        }
+
+        if ($level === 'JHS' && $this->input('shift') === 'PART_TIME') {
+            $validator->errors()->add('shift', 'The part-time shift is for Senior High only.');
+        }
+
+        if ($level === 'JHS' && $this->filled('strand')) {
+            $validator->errors()->add('strand', 'Only Senior High sections have a strand.');
+        }
+
+        // A Senior High section needs its track and strand (team decision, Nov 21, 2026).
+        if ($level === 'SHS' && ! $this->filled('track_id') && ! $validator->errors()->has('track_id')) {
+            $validator->errors()->add('track_id', 'Choose the track of this Senior High section.');
+        }
+
+        if ($level === 'SHS' && blank(trim((string) $this->input('strand')))) {
+            $validator->errors()->add('strand', 'Type the strand of this Senior High section.');
         }
     }
 

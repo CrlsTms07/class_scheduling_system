@@ -23,7 +23,7 @@
             <tr>
                 <th>Teacher</th>
                 <th>Department</th>
-                <th>Assigned</th>
+                <th>Loads</th>
                 <th>Limit</th>
                 <th>Minutes per week</th>
                 <th>Classes</th>
@@ -32,9 +32,9 @@
         <tbody>
             @forelse ($teachers as $teacher)
                 <tr>
-                    <td>{{ $teacher['name'] }}@if ($teacher['is_overloaded'])<br><strong>Overloaded</strong>@endif</td>
+                    <td>{{ $teacher['name'] }}@if ($teacher['is_overloaded'])<br><strong>Overload</strong>@endif</td>
                     <td>{{ $teacher['department'] }}</td>
-                    <td>{{ $teacher['assigned'] }}</td>
+                    <td>{{ $teacher['assigned'] }}@if (! empty($teacher['advises']))<br>(incl. advisory, 1 load)@endif</td>
                     <td>{{ $teacher['limit'] }}</td>
                     <td>{{ $teacher['minutes'] }}</td>
                     <td>

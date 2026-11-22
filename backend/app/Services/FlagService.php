@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\DayPattern;
 use App\Models\ScheduleEntry;
 use App\Models\Section;
+use App\Models\SectionSubject;
+use App\Support\Curriculum;
 use App\Support\ScheduleFormat;
 use Illuminate\Support\Facades\DB;
 
@@ -29,6 +31,7 @@ class FlagService
             ...$this->noRoom($section, $termId),
             ...$this->breaksAndShifts($section, $termId),
             ...$this->overloadedTeachers($section, $termId),
+            ...$this->longTeachingDays($section, $termId),
         ];
 
         $acknowledged = DB::table('schedule_flag_acknowledgements')
@@ -66,23 +69,83 @@ class FlagService
             return [];
         }
 
+        // Homeroom Guidance: at most 40 minutes a week in Junior High, 60 in Senior High (Nov 22, 2026).
+        $level = $section->gradeLevel->level;
+        $limit = Curriculum::homeroomMinutes($level);
         $rows = DB::table('subject_minutes_check')
             ->where('term_id', $termId)
             ->where('section_id', $section->id)
-            ->whereColumn('scheduled_minutes', '<>', 'required_minutes')
+            ->whereRaw("subject ~* 'home\s*room'")
+            ->where('scheduled_minutes', '>', $limit)
             ->orderBy('subject')
             ->get();
 
-        return $rows->map(fn ($row) => [
+        $flags = $rows->map(fn ($row) => [
             'key' => "minutes:{$row->section_subject_id}:{$row->scheduled_minutes}",
-            'type' => $row->scheduled_minutes > $row->required_minutes ? 'minutes_over' : 'minutes_under',
-            'severity' => $row->scheduled_minutes > $row->required_minutes ? 'red' : 'amber',
-            // Said as what to do: how many minutes to add or take away.
-            'message' => $row->scheduled_minutes < $row->required_minutes
-                ? "{$row->subject} needs ".($row->required_minutes - $row->scheduled_minutes)." more minutes a week ({$row->scheduled_minutes} of {$row->required_minutes} scheduled)."
-                : "{$row->subject} has ".($row->scheduled_minutes - $row->required_minutes)." minutes too many a week ({$row->scheduled_minutes} of {$row->required_minutes} scheduled).",
+            'type' => 'minutes_over',
+            'severity' => 'red',
+            // Said as what to do: how many minutes to take away.
+            'message' => "{$row->subject} has ".($row->scheduled_minutes - $limit)." minutes too many a week ({$row->scheduled_minutes} scheduled, at most {$limit}).",
             'section_subject_id' => $row->section_subject_id,
         ])->all();
+
+        return $level === 'SHS' ? [...$flags, ...$this->seniorHighBlocks($section, $termId)] : $flags;
+    }
+
+    /**
+     * Senior High block schedule (team decision, Nov 22, 2026): each subject needs its face-to-face
+     * minutes (like 2 blocks of 120) and its asynchronous minutes (like 90) a week, from
+     * config/curriculum.php. A subject with other minutes is flagged in amber, saying what is
+     * missing or extra. Homeroom only has its limit above.
+     */
+    private function seniorHighBlocks(Section $section, int $termId): array
+    {
+        $placed = DB::table('schedule_entries')
+            ->where('term_id', $termId)
+            ->where('section_id', $section->id)
+            ->where('status', '<>', 'rejected')
+            ->whereNotNull('section_subject_id')
+            ->groupBy('section_subject_id')
+            ->selectRaw('section_subject_id,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60) FILTER (WHERE NOT is_async), 0)::INT AS f2f,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60) FILTER (WHERE is_async), 0)::INT AS async')
+            ->get()
+            ->keyBy('section_subject_id');
+
+        $flags = [];
+        $loadings = SectionSubject::with('subject')->where('term_id', $termId)->where('section_id', $section->id)->get();
+        foreach ($loadings->sortBy(fn (SectionSubject $loading) => $loading->subject->name) as $loading) {
+            if ($loading->subject->isHomeroom()) {
+                continue;
+            }
+            $target = Curriculum::targetFor($loading->subject->name, 'SHS');
+            $f2f = (int) ($placed[$loading->id]->f2f ?? 0);
+            $async = (int) ($placed[$loading->id]->async ?? 0);
+            $needAsync = (int) ($target['async_minutes'] ?? 0);
+            if ($target === null || ($f2f === $target['minutes'] && $async === $needAsync)) {
+                continue;
+            }
+
+            $flags[] = [
+                'key' => "shs_blocks:{$loading->id}:{$f2f}:{$async}",
+                'type' => 'shs_blocks',
+                'severity' => 'amber',
+                'message' => "{$loading->subject->name} needs {$target['minutes']} face-to-face minutes ("
+                    .self::blocksText($target['sessions'], $target['minutes'])
+                    .") and {$needAsync} asynchronous minutes a week; it has {$f2f} face-to-face and {$async} asynchronous.",
+                'section_subject_id' => $loading->id,
+            ];
+        }
+
+        return $flags;
+    }
+
+    /** "2 blocks of 120 mins", "1 block of 120 mins". */
+    private static function blocksText(int $sessions, int $minutes): string
+    {
+        $each = intdiv($minutes, max(1, $sessions));
+
+        return $sessions === 1 ? "1 block of {$each} mins" : "{$sessions} blocks of {$each} mins";
     }
 
     /**
@@ -116,6 +179,8 @@ class FlagService
             ->where('status', '<>', 'rejected')
             ->whereNotNull('section_subject_id')
             ->whereNull('room_id')
+            // An asynchronous class needs no room.
+            ->where('is_async', false)
             ->count();
 
         return $count === 0 ? [] : [[
@@ -172,7 +237,7 @@ class FlagService
                     'key' => "teacher_shift:{$entry->id}",
                     'type' => 'teacher_shift',
                     'severity' => 'amber',
-                    'message' => "{$entry->teacher->printedName()} has the {$entry->teacher->shift} shift, but teaches on {$when}.",
+                    'message' => "{$entry->teacher->printedName()} has the ".(['AM' => 'morning', 'PM' => 'afternoon', 'PART_TIME' => 'part-time'][$entry->teacher->shift] ?? $entry->teacher->shift)." shift, but teaches on {$when}.",
                 ];
             }
         }
@@ -201,6 +266,39 @@ class FlagService
         return $entry->start_time < $slots->min('start_time') || $entry->end_time > $slots->max('end_time');
     }
 
+    /**
+     * A teacher of this section who teaches more than 6 hours on a day this section has them
+     * (RA 4670; team decision, Nov 21, 2026). Every section of the term counts, both levels.
+     */
+    private function longTeachingDays(Section $section, int $termId): array
+    {
+        $limit = (int) config('school.teacher_day_minutes');
+
+        $rows = DB::table('schedule_entries AS e')
+            ->join('teachers', 'teachers.id', '=', 'e.teacher_id')
+            ->where('e.term_id', $termId)
+            ->where('e.status', '<>', 'rejected')
+            ->whereExists(fn ($query) => $query->from('schedule_entries AS own')
+                ->whereColumn('own.teacher_id', 'e.teacher_id')
+                ->whereColumn('own.day_of_week', 'e.day_of_week')
+                ->where('own.term_id', $termId)
+                ->where('own.section_id', $section->id)
+                ->where('own.status', '<>', 'rejected'))
+            ->groupBy('e.teacher_id', 'e.day_of_week', 'teachers.first_name', 'teachers.last_name')
+            ->havingRaw('SUM(EXTRACT(EPOCH FROM (e.end_time - e.start_time)) / 60) > ?', [$limit])
+            ->orderBy('teachers.last_name')
+            ->orderBy('e.day_of_week')
+            ->selectRaw('e.teacher_id, e.day_of_week, teachers.first_name, teachers.last_name, SUM(EXTRACT(EPOCH FROM (e.end_time - e.start_time)) / 60)::INT AS minutes')
+            ->get();
+
+        return $rows->map(fn ($row) => [
+            'key' => "teacher_day_hours:{$row->teacher_id}:{$row->day_of_week}:{$row->minutes}",
+            'type' => 'teacher_day_hours',
+            'severity' => 'amber',
+            'message' => "{$row->first_name} {$row->last_name} teaches ".ScheduleFormat::duration((int) $row->minutes).' on '.ScheduleFormat::dayName((int) $row->day_of_week).', more than '.ScheduleFormat::duration($limit).' a day.',
+        ])->all();
+    }
+
     private function overloadedTeachers(Section $section, int $termId): array
     {
         $rows = DB::table('teacher_load')
@@ -212,15 +310,17 @@ class FlagService
             ->join('teachers', 'teachers.id', '=', 'teacher_load.teacher_id')
             ->where('teacher_load.term_id', $termId)
             ->where('teacher_load.is_overloaded', true)
-            ->select('teachers.id', 'teachers.first_name', 'teachers.last_name', 'teachers.display_name', 'teacher_load.subject_count', 'teacher_load.max_subjects')
+            ->select('teachers.id', 'teachers.first_name', 'teachers.last_name', 'teacher_load.subject_count', 'teacher_load.adviser_credit', 'teacher_load.loads', 'teacher_load.max_subjects')
             ->distinct()
             ->get();
 
         return $rows->map(fn ($row) => [
-            'key' => "teacher_overloaded:{$row->id}:{$row->subject_count}",
+            'key' => "teacher_overloaded:{$row->id}:{$row->loads}",
             'type' => 'teacher_overloaded',
             'severity' => 'amber',
-            'message' => ($row->display_name ?: "{$row->first_name} {$row->last_name}")." has {$row->subject_count} classes (limit {$row->max_subjects}).",
+            // An advisory counts as 1 load (Nov 22, 2026).
+            'message' => "Overload: {$row->first_name} {$row->last_name} has {$row->loads} loads ({$row->subject_count} ".($row->subject_count == 1 ? 'subject' : 'subjects')
+                .($row->adviser_credit ? ' + 1 advisory' : '').", limit {$row->max_subjects}).",
         ])->all();
     }
 }

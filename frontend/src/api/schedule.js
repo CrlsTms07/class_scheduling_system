@@ -86,6 +86,21 @@ export async function clearSlot(termId, sectionId, { slotId, days }) {
   return keep(termId, sectionId, data);
 }
 
+/**
+ * A typed time: the period it matches on each day, or a new period of the bell schedule (a day
+ * with no bell schedule gets one). Returns the period of each day, like { "1": 12, "2": 12 }.
+ * @param {number} termId
+ * @param {number} sectionId
+ * @param {{ days: number[], start_time: string, end_time: string }} body
+ * @returns {Promise<Record<string, number>>}
+ */
+export async function resolvePeriod(termId, sectionId, body) {
+  const { data } = /** @type {{ data: { slots: Record<string, number>, plotter: Plotter } }} */ (await api(`/terms/${termId}/sections/${sectionId}/periods`, { method: "POST", body }));
+  invalidate(["school-years"]);
+  keep(termId, sectionId, data.plotter);
+  return data.slots;
+}
+
 
 /**
  * Puts an activity on this section, its grade level or all sections. With preview, only says
@@ -168,7 +183,7 @@ export async function quickAddTeacher(body) {
 /**
  * The conflicts and suggestions in an API error, when it is a schedule conflict.
  * @param {unknown} error
- * @returns {{ conflicts: { type: string, days: number[], message: string }[], suggestions: { rooms: { id: number, label: string }[], slots: { id: number, label: string }[], teachers: { id: number, name: string, teaches_subject: boolean, hours_per_week: number }[] } } | null}
+ * @returns {{ conflicts: { type: string, days: number[], message: string }[], suggestions: { rooms: { id: number, label: string }[], slots: { id: number, label: string }[], teachers: { id: number, name: string, teaches_subject: boolean, hours_per_week: number, over_day_limit?: boolean }[] } } | null}
  */
 export function conflictDetailsOf(error) {
   const problem = /** @type {any} */ (error);
@@ -225,24 +240,5 @@ export async function setSectionRoom(termId, sectionId, roomId) {
 export async function copySchedule(termId, body) {
   const { data } = /** @type {{ data: any }} */ (await api(`/terms/${termId}/schedule-copy`, { method: "POST", body }));
   if (!body.preview) invalidate(["terms", termId]);
-  return data;
-}
-
-/**
- * Reads a schedule file. With preview, every row is only checked; with setUp, what the file names
- * but the system lacks (sections, subjects, teachers, rooms, bell schedules) is set up from it.
- * @param {number} termId
- * @param {{ file: File, preview: boolean, setUp: boolean }} input
- */
-export async function importSchedule(termId, { file, preview, setUp }) {
-  const body = new FormData();
-  body.append("file", file);
-  body.append("preview", preview ? "1" : "0");
-  body.append("set_up", setUp ? "1" : "0");
-  const { data } = /** @type {{ data: any }} */ (await api(`/terms/${termId}/schedule-import`, { method: "POST", body }));
-  if (!preview) {
-    if (setUp) invalidate([]);
-    else invalidate(["terms", termId]);
-  }
   return data;
 }

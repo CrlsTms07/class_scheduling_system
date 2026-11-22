@@ -339,35 +339,39 @@ describe('plotter data', function () {
         $data = $this->getJson("/api/terms/{$this->termId}/sections/{$this->sectionA->id}/plotter")->json('data');
         $math = collect($data['loading'])->firstWhere('subject', 'Enhanced Mathematics');
 
+        // Minutes are counted from the schedule, never typed (beneficiary review, Nov 21, 2026).
         expect($math['scheduled_minutes'])->toBe(320)
-            ->and($math['required_minutes'])->toBe(400)
+            ->and($math['required_minutes'])->toBeNull()
             ->and($data['status'])->toBe('draft');
     });
 
-    it('flags a subject under its minutes in amber', function () {
+    it('no longer flags a subject for its minutes, since minutes are not typed', function () {
         assign($this, $this->sectionA, slotOf('Monday – Thursday', 3), mathInSlot($this->sectionA))->assertOk();
 
         $data = $this->getJson("/api/terms/{$this->termId}/sections/{$this->sectionA->id}/plotter")->json('data');
-        $flag = collect($data['flags'])->first(fn ($flag) => str_contains($flag['message'], 'Enhanced Mathematics'));
 
-        expect($flag['type'])->toBe('minutes_under')
-            ->and($flag['severity'])->toBe('amber')
-            ->and($flag['message'])->toContain('320 of 400');
+        expect(collect($data['flags'])->first(fn ($flag) => str_contains($flag['message'], 'Enhanced Mathematics')))->toBeNull()
+            ->and(collect($data['loading'])->firstWhere('subject', 'Homeroom Guidance')['required_minutes'])->toBe(40);
     });
 
-    it('flags Homeroom over 60 minutes in red', function () {
+    it('flags Homeroom over 40 minutes (Junior High) in red', function () {
         assign($this, $this->sectionA, slotOf('Monday – Thursday', 3), [
             'section_subject_id' => loadingFor($this->sectionA, 'Homeroom Guidance')->id,
             'room_id' => $this->sectionA->home_room_id,
-            'days' => [1],
+            // Twice a week: in a longer period Homeroom takes only its 40 minutes (Nov 22, 2026), so
+            // two days make 80.
+            'days' => [1, 2],
         ])->assertOk();
 
         $data = $this->getJson("/api/terms/{$this->termId}/sections/{$this->sectionA->id}/plotter")->json('data');
         $flag = collect($data['flags'])->first(fn ($flag) => str_contains($flag['message'], 'Homeroom Guidance'));
+        $entry = DB::table('schedule_entries')->where('section_subject_id', loadingFor($this->sectionA, 'Homeroom Guidance')->id)->first();
+        expect((strtotime($entry->end_time) - strtotime($entry->start_time)) / 60)->toEqual(40);
 
         expect($flag['type'])->toBe('minutes_over')
             ->and($flag['severity'])->toBe('red')
-            ->and($flag['message'])->toContain('80 of 60');
+            // Junior High: at most 40 minutes a week (Nov 22, 2026).
+            ->and($flag['message'])->toBe('Homeroom Guidance has 40 minutes too many a week (80 scheduled, at most 40).');
     });
 
     it('flags a section without an adviser', function () {

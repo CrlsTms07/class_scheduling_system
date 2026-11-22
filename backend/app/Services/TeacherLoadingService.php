@@ -43,6 +43,7 @@ class TeacherLoadingService
                 'adviser' => $section->adviser?->printedName(),
             ],
             'rows' => $this->rows($term, $section),
+            'addable' => $this->addable($term, $section),
             'teachers' => $this->teacherChoices($term),
         ];
     }
@@ -75,7 +76,8 @@ class TeacherLoadingService
                     'subject_id' => $subject->id,
                     'subject' => $subject->name,
                     'code' => $subject->code,
-                    'minutes_per_week' => $subject->minutes_per_week,
+                    // Counted from the schedule, never typed (beneficiary review, Nov 21, 2026).
+                    'scheduled_minutes' => (int) $placed->sum(fn (ScheduleEntry $entry) => \App\Support\ScheduleFormat::minutesBetween($entry->start_time, $entry->end_time)),
                     'is_priority' => (bool) $subject->is_priority,
                     'is_active' => (bool) $subject->is_active,
                     'teacher_id' => $item?->teacher_id,
@@ -89,8 +91,9 @@ class TeacherLoadingService
     }
 
     /**
-     * Offered subjects of this grade for this term and track, plus any already loaded,
-     * so old loading stays visible even if the subject has since been withdrawn.
+     * The subjects this section takes: those added to it (with their teacher), plus the offered
+     * subjects made for its grade before Nov 21, 2026. A subject for every grade (no grade) is
+     * listed only once it is added to the section, with "Add subject".
      *
      * @param  array<int, int>  $loadedSubjectIds
      */
@@ -98,13 +101,37 @@ class TeacherLoadingService
     {
         return Subject::query()
             ->where('school_year_id', $section->school_year_id)
-            ->where('grade_level_id', $section->grade_level_id)
             ->where(fn ($query) => $query
                 ->whereIn('id', $loadedSubjectIds)
-                ->orWhere(fn ($offered) => $this->offeredTo($offered, $term, $section)))
+                ->orWhere(fn ($offered) => $offered
+                    ->where('grade_level_id', $section->grade_level_id)
+                    ->where(fn ($inner) => $this->offeredTo($inner, $term, $section))))
             ->orderByDesc('is_priority')
             ->orderBy('name')
             ->get();
+    }
+
+    /**
+     * What "Add subject" offers this section: subjects of the year that are offered now and not
+     * listed yet (one form: subject, section, teacher, as the beneficiary explained).
+     *
+     * @return array<int, array{id: int, name: string, code: string|null}>
+     */
+    private function addable(SchoolTerm $term, Section $section): array
+    {
+        $listed = SectionSubject::where('term_id', $term->id)->where('section_id', $section->id)->pluck('subject_id');
+
+        return Subject::query()
+            ->where('school_year_id', $section->school_year_id)
+            ->whereNull('grade_level_id')
+            // Only subjects of the section's own level (or with no level yet).
+            ->where(fn ($query) => $query->where('level', $section->gradeLevel->level)->orWhereNull('level'))
+            ->whereNotIn('id', $listed)
+            ->where(fn ($query) => $this->offeredTo($query, $term, $section))
+            ->orderBy('name')
+            ->get(['id', 'name', 'code'])
+            ->map(fn (Subject $subject) => ['id' => $subject->id, 'name' => $subject->name, 'code' => $subject->code])
+            ->all();
     }
 
     private function offeredTo($query, SchoolTerm $term, Section $section): void
@@ -127,19 +154,54 @@ class TeacherLoadingService
             ->groupBy('teacher_id')
             ->pluck('assigned', 'teacher_id');
 
+        // A Chairperson or Master Teacher picks from the teachers of their own level (Nov 21, 2026),
+        // plus anyone already teaching a class in this term in their grade levels.
+        $own = auth()->user()?->departmentsInScope();
+        $departmentLevels = DB::table('departments')->pluck('level', 'id');
+        $advisories = $this->advisoriesIn($term);
+        $departmentNames = DB::table('departments')->pluck('name', 'id');
+        $teachingHere = $own === null ? collect() : DB::table('section_subjects')
+            ->join('sections', 'sections.id', '=', 'section_subjects.section_id')
+            ->where('section_subjects.term_id', $term->id)
+            ->whereIn('sections.grade_level_id', auth()->user()->gradeLevelIdsInScope())
+            ->pluck('section_subjects.teacher_id')
+            ->flip();
+
         return Teacher::where('personnel_type', 'teaching')
             ->where('is_active', true)
             ->orderBy('last_name')
             ->orderBy('first_name')
             ->get()
-            ->map(fn (Teacher $teacher) => [
-                'id' => $teacher->id,
-                'name' => $teacher->printedName(),
-                'shift' => $teacher->shift,
-                'assigned' => (int) ($loads[$teacher->id] ?? 0),
-                'limit' => $teacher->max_subjects,
-            ])
+            // Teachers of the other level may be borrowed (Nov 21, 2026): they come last, marked.
+            ->map(fn (Teacher $teacher) => [$teacher, $own !== null
+                && ($departmentLevels[$teacher->department_id] ?? null) !== null
+                && ! in_array($departmentLevels[$teacher->department_id], $own, true)
+                && ! $teachingHere->has($teacher->id)])
+            ->sortBy(fn (array $pair) => $pair[1] ? 1 : 0)
+            ->values()
+            ->map(fn (array $pair) => [...$this->teacherChoice($pair[0], $loads, $departmentNames, $advisories), 'from_level' => $pair[1] ? $departmentLevels[$pair[0]->department_id] : null])
             ->all();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function teacherChoice(Teacher $teacher, $loads, $departmentNames, array $advisories): array
+    {
+        $subjects = (int) ($loads[$teacher->id] ?? 0);
+        $credit = isset($advisories[$teacher->id]) ? 1 : 0;
+
+        return [
+            'id' => $teacher->id,
+            'name' => $teacher->printedName(),
+            'shift' => $teacher->shift,
+            // Loads: subjects plus 1 for an advisory (team decision, Nov 22, 2026).
+            'assigned' => $subjects + $credit,
+            'subjects' => $subjects,
+            'advises' => $advisories[$teacher->id] ?? null,
+            'limit' => $teacher->max_subjects,
+            'department' => $departmentNames[$teacher->department_id] ?? null,
+        ];
     }
 
     /**
@@ -156,6 +218,8 @@ class TeacherLoadingService
         if (! $existing) {
             $this->ensureOffered($term, $section, $subject);
         }
+
+        $this->stopIfFullLoad($term, $teacherId);
 
         try {
             DB::transaction(function () use ($existing, $term, $section, $subject, $teacherId, $user) {
@@ -240,11 +304,11 @@ class TeacherLoadingService
      * term already has is never overwritten, and only active teaching personnel carry over.
      *
      * @param  array<int, int>|null  $sectionIds  only these sections, when given
-     * @return array{copied: int, already_set: int, not_offered: int, teacher_unavailable: int}
+     * @return array{copied: int, already_set: int, not_offered: int, teacher_unavailable: int, full_load: int}
      */
     public function copyFromTerm(SchoolTerm $term, SchoolTerm $from, ?array $sectionIds, User $user): array
     {
-        $result = ['copied' => 0, 'already_set' => 0, 'not_offered' => 0, 'teacher_unavailable' => 0];
+        $result = ['copied' => 0, 'already_set' => 0, 'not_offered' => 0, 'teacher_unavailable' => 0, 'full_load' => 0];
 
         return DB::transaction(function () use ($term, $from, $sectionIds, $user, $result) {
             $sections = Section::visibleTo($user)
@@ -263,6 +327,7 @@ class TeacherLoadingService
                 ->get()
                 ->map(fn (SectionSubject $row) => "{$row->section_id}|{$row->subject_id}")
                 ->flip();
+            $loads = $this->effectiveLoadsIn($term);
 
             foreach ($sources as $source) {
                 $section = $sections[$source->section_id];
@@ -271,12 +336,14 @@ class TeacherLoadingService
                     $existing->has("{$source->section_id}|{$source->subject_id}") => 'already_set',
                     ! $this->isOfferedTo($source->subject, $term, $section) => 'not_offered',
                     $source->teacher->personnel_type !== 'teaching' || ! $source->teacher->is_active => 'teacher_unavailable',
+                    ($loads[$source->teacher_id] ?? 0) >= $source->teacher->max_subjects => 'full_load',
                     default => 'copied',
                 };
 
                 $result[$outcome]++;
 
                 if ($outcome === 'copied') {
+                    $loads[$source->teacher_id] = ($loads[$source->teacher_id] ?? 0) + 1;
                     SectionSubject::create([
                         'term_id' => $term->id,
                         'section_id' => $source->section_id,
@@ -294,6 +361,77 @@ class TeacherLoadingService
 
             return $result;
         });
+    }
+
+    /**
+     * How many subjects each teacher already has in this term.
+     *
+     * @return array<int, int>
+     */
+    public function loadsIn(SchoolTerm $term): array
+    {
+        return DB::table('section_subjects')
+            ->where('term_id', $term->id)
+            ->selectRaw('teacher_id, COUNT(*) AS assigned')
+            ->groupBy('teacher_id')
+            ->pluck('assigned', 'teacher_id')
+            ->map(fn ($count) => (int) $count)
+            ->all();
+    }
+
+    /**
+     * The section each teacher advises in the term's school year (teacher id => "Grade 11 – A").
+     *
+     * @return array<int, string>
+     */
+    public function advisoriesIn(SchoolTerm $term): array
+    {
+        return Section::with('gradeLevel')
+            ->where('school_year_id', $term->school_year_id)
+            ->whereNotNull('adviser_id')
+            ->get()
+            ->mapWithKeys(fn (Section $section) => [$section->adviser_id => $section->label()])
+            ->all();
+    }
+
+    /**
+     * Each teacher's loads in the term: subjects, plus 1 for an advisory (team decision, Nov 22, 2026).
+     *
+     * @return array<int, int>
+     */
+    public function effectiveLoadsIn(SchoolTerm $term): array
+    {
+        $loads = $this->loadsIn($term);
+        foreach (array_keys($this->advisoriesIn($term)) as $teacherId) {
+            $loads[$teacherId] = ($loads[$teacherId] ?? 0) + 1;
+        }
+
+        return $loads;
+    }
+
+    /**
+     * A teacher carries at most max_subjects (5) loads a term, an advisory counting as 1: the next
+     * subject is refused with "Full load" (beneficiary review, Nov 21, 2026; adviser credit Nov 22).
+     */
+    private function stopIfFullLoad(SchoolTerm $term, int $teacherId): void
+    {
+        $teacher = Teacher::find($teacherId);
+        if (! $teacher) {
+            return;
+        }
+
+        $subjects = $this->loadsIn($term)[$teacherId] ?? 0;
+        $advises = $this->advisoriesIn($term)[$teacherId] ?? null;
+        $loads = $subjects + ($advises ? 1 : 0);
+
+        if ($loads >= $teacher->max_subjects) {
+            $what = $advises
+                ? "{$subjects} ".($subjects === 1 ? 'subject' : 'subjects')." and the advisory of {$advises} (1 load)"
+                : "{$subjects} ".($subjects === 1 ? 'subject' : 'subjects');
+            throw ValidationException::withMessages([
+                'teacher_id' => "Full load: {$teacher->printedName()} already has {$loads} ".($loads === 1 ? 'load' : 'loads')." this term ({$what}), the most a teacher can carry. Choose another teacher.",
+            ]);
+        }
     }
 
     private function isOfferedTo(Subject $subject, SchoolTerm $term, Section $section): bool
@@ -314,7 +452,8 @@ class TeacherLoadingService
     private function ensureOffered(SchoolTerm $term, Section $section, Subject $subject): void
     {
         $isOffered = $subject->school_year_id === $section->school_year_id
-            && $subject->grade_level_id === $section->grade_level_id
+            && ($subject->level === null || $subject->level === $section->gradeLevel->level)
+            && ($subject->grade_level_id === null || $subject->grade_level_id === $section->grade_level_id)
             && Subject::whereKey($subject->id)
                 ->where(fn ($query) => $this->offeredTo($query, $term, $section))
                 ->exists();

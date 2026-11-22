@@ -48,10 +48,10 @@ test("dashboards fit each role", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await signIn(page, "admin@deped.gov.ph");
   await expect(page.getByText("Accounts to activate")).toBeVisible();
-  await expect(page.getByRole("region", { name: "Making the schedule" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Steps to make the schedule" })).toBeVisible();
 
   await signIn(page, "glc@deped.gov.ph");
-  await expect(page.getByRole("region", { name: "Making the schedule" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Steps to make the schedule" })).toBeVisible();
   await expect(page.getByText("Waiting for approval")).toBeVisible();
 
   await signIn(page, "teacher@deped.gov.ph");
@@ -72,6 +72,7 @@ test("adds a building with a room, a bell schedule from a preset, a subject, a s
   await page.goto("/buildings");
   await page.getByRole("button", { name: "Add building" }).first().click();
   await fill(page, "Building name", "Annex E2E");
+  if (await page.getByRole("dialog").getByRole("button", { name: /^Used by/ }).count()) await choose(page, "Used by", "Junior High");
   await page.getByRole("dialog").getByRole("button", { name: "Add building" }).click();
   await expect(page.getByText("Annex E2E was added.")).toBeVisible();
   await page.getByRole("region", { name: "Annex E2E" }).getByRole("button", { name: "Add room" }).click();
@@ -88,38 +89,57 @@ test("adds a building with a room, a bell schedule from a preset, a subject, a s
   await page.getByRole("dialog").getByRole("button", { name: "Add bell schedule" }).click();
   await expect(page.getByText("AM Monday – Friday was added.")).toBeVisible();
   await page.getByRole("region", { name: "AM Monday – Friday" }).getByRole("button", { name: "Use a preset" }).click();
+  // The morning shift ends at 12:30 PM (Nov 22, 2026): 8 rows of 40-minute periods fit.
+  await choose(page, "Rows", "8 rows");
+  await page.getByRole("dialog").getByRole("spinbutton", { name: /^Minutes per period/ }).fill("40");
+  // The break positions are choices with the time each period ends (only possible ones are offered).
+  await choose(page, "Lunch comes", "After period 5 ");
   await page.getByRole("dialog").getByRole("button", { name: "Fill the bell schedule" }).click();
-  await expect(page.getByText("AM Monday – Friday now has 10 rows.")).toBeVisible();
+  await expect(page.getByText("AM Monday – Friday now has 8 rows.")).toBeVisible();
 
   await page.goto("/subjects");
   await page.getByRole("button", { name: "Add subject" }).first().click();
-  // Subject name is a searchable list of the names already used; a new one is typed and chosen with Use.
-  await page.getByRole("dialog").getByRole("button", { name: /^Subject name/ }).click();
-  await page.getByLabel("Search subject name").fill("Robotics E2E");
-  await page.getByRole("option", { name: 'Use "Robotics E2E"' }).click();
-  await choose(page, "Grade level", "Grade 8");
-  await page.getByRole("dialog").getByRole("spinbutton", { name: /^Minutes per week/ }).fill("120");
+  // Name only, checked while typing; the Senior High details are the Admin's.
+  await fill(page, "Subject name", "Robotics E2E");
+  if (await page.getByRole("dialog").getByRole("button", { name: /^For/ }).count()) await choose(page, "For", "Junior High");
+  // Name only: no grade and no minutes (beneficiary review, Nov 21, 2026).
+  await expect(page.getByRole("dialog").getByRole("spinbutton", { name: /^Minutes per week/ })).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "Add subject" }).click();
   await expect(page.getByText("Robotics E2E was added.")).toBeVisible();
-
-  await page.goto("/sections");
-  await page.getByRole("button", { name: "Add section" }).first().click();
-  await fill(page, "Section name", "Diligence E2E");
-  await choose(page, "Grade level", "Grade 8");
-  await page.getByRole("dialog").getByRole("button", { name: "Add section" }).click();
-  await expect(page.getByText("Diligence E2E was added.")).toBeVisible();
 
   await page.goto("/teachers");
   await page.getByRole("button", { name: "Add teacher" }).first().click();
   await fill(page, "First name", "Rosa");
   await fill(page, "Last name", "Bautista");
-  await page.getByRole("dialog").getByRole("button", { name: "Add a degree" }).click();
-  await page.getByRole("dialog").getByLabel("Degree", { exact: true }).fill("BSEd Mathematics");
+  await choose(page, "Department of", "Junior High");
+  await choose(page, "Department(?! of)", "Mathematics");
+  await choose(page, "Designation", "Teacher I");
   await page.getByRole("dialog").getByRole("button", { name: "Add teacher" }).click();
   await expect(page.getByText("Rosa Bautista was added.")).toBeVisible();
   await page.getByRole("link", { name: /Bautista/ }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: /Bautista/ })).toBeVisible();
-  await expect(page.getByText("BSEd Mathematics")).toBeVisible();
+  await expect(page.getByText("Teacher I · Mathematics")).toBeVisible();
+
+  // The adviser and the room are required (Nov 21, 2026); a room can be added from the dropdown.
+  await page.goto("/sections");
+  await page.getByRole("button", { name: "Add section" }).first().click();
+  await fill(page, "Section name", "Diligence E2E");
+  await choose(page, "Grade level", "Grade 8");
+  await page.getByRole("dialog").getByRole("button", { name: "Add section" }).click();
+  await expect(page.getByText("Adviser is required")).toBeVisible();
+  await choose(page, "Adviser", "Bautista");
+  await page.getByRole("dialog").getByRole("button", { name: /^Home room/ }).click();
+  await page.getByRole("searchbox", { name: /^Search home room/ }).fill("302");
+  await page.getByRole("option", { name: 'Add "302"' }).click();
+  const roomDialog = page.getByRole("dialog", { name: "Add a room" });
+  await roomDialog.getByRole("button", { name: /^Building/ }).click();
+  await page.getByRole("option", { name: /Annex E2E/ }).first().click();
+  await expect(roomDialog.getByRole("textbox", { name: /^Room number/ })).toHaveValue("302");
+  await roomDialog.getByRole("button", { name: "Add room" }).click();
+  await expect(page.getByText("Room Annex E2E – 302 was added.")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Add a section" }).getByRole("button", { name: /^Home room/ })).toContainText("Annex E2E – 302");
+  await page.getByRole("dialog", { name: "Add a section" }).getByRole("button", { name: "Add section" }).click();
+  await expect(page.getByText("Diligence E2E was added.")).toBeVisible();
 });
 
 test("a new sign-up is activated by the Admin", async ({ page }) => {
@@ -163,22 +183,22 @@ test("the school years, report settings, guide, rooms and buildings open", async
   await signIn(page, "admin@deped.gov.ph");
   await page.goto("/school-years");
   await page.getByRole("button", { name: "Start a new school year" }).first().click();
-  await expect(page.getByRole("dialog").getByText("1. Name and dates")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText("1. Dates")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Calendar settings" }).first().click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: /Calendar settings/ })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
 
   await page.goto("/report-settings");
-  await page.getByRole("button", { name: "Edit profile" }).click();
-  await page.getByRole("dialog").getByRole("textbox", { name: /^Tagline/ }).fill("Excellence in every class");
-  await page.getByRole("dialog").getByRole("button", { name: "Save profile" }).click();
-  await expect(page.getByText("The school profile was saved.")).toBeVisible();
+  // The school's details and logo are built in; only the contact details are edited.
+  await expect(page.getByText("Built into the system")).toBeVisible();
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.getByRole("dialog").getByRole("textbox", { name: /^Phone/ }).fill("(046) 894-1463");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("The school's contact details were saved.")).toBeVisible();
   await page.getByRole("tab", { name: "Signatories" }).click();
-  await expect(page.getByRole("button", { name: "Add signatory" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Junior High Class Program: Conforme" })).toBeVisible();
 
-  await page.goto("/guide");
-  await expect(page.getByRole("heading", { level: 1, name: "How to make a schedule" })).toBeVisible();
   await page.goto("/schedule");
   await page.getByRole("tab", { name: "Sample Building" }).click();
   await page.getByRole("link", { name: "View building" }).click();
@@ -188,7 +208,7 @@ test("the school years, report settings, guide, rooms and buildings open", async
 });
 
 const PAGES = [
-  ["admin@deped.gov.ph", ["/dashboard", "/buildings", "/time-slots", "/subjects", "/sections", "/teachers", "/users", "/school-years", "/report-settings", "/guide"]],
+  ["admin@deped.gov.ph", ["/dashboard", "/buildings", "/time-slots", "/subjects", "/sections", "/teachers", "/users", "/school-years", "/report-settings"]],
   ["teacher@deped.gov.ph", ["/dashboard", "/my-schedule", "/my-profile"]],
 ];
 

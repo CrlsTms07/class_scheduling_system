@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 
+/* The gothic letters of the official DepEd heading ("Republic of the Philippines", "Department of
+   Education"), the same font as the printed forms (SIL Open Font License, public/fonts). */
+@font-face {
+  font-family: "UnifrakturMaguntia";
+  src: url("/fonts/UnifrakturMaguntia-Book.ttf") format("truetype");
+  font-display: swap;
+}
+
 /* Dark mode follows a class on <html>, set from the user's choice (src/state/theme.js). */
 @custom-variant dark (&:where(.dark, .dark *));
 

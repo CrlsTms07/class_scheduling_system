@@ -121,7 +121,7 @@ describe('the list', function () {
             ->assertJsonPath('data.section.label', 'Grade 7 – Honesty')
             ->assertJsonPath('data.rows.0.subject', 'Math 7')
             ->assertJsonPath('data.rows.0.teacher_id', null)
-            ->assertJsonPath('data.rows.0.minutes_per_week', 225)
+            ->assertJsonPath('data.rows.0.scheduled_minutes', 0)
             ->assertJsonPath('data.teachers.1.name', 'Ana Reyes')
             ->assertJsonPath('data.teachers.1.assigned', 1)
             ->assertJsonPath('data.teachers.1.limit', 1);
@@ -182,6 +182,26 @@ describe('assigning', function () {
             ->and(DB::table('audit_logs')->where('table_name', 'section_subjects')->where('action', 'create')->exists())->toBeTrue();
     });
 
+    it('counts an advisory as 1 load, so an adviser is full one subject sooner (Nov 22, 2026)', function () {
+        loadingRow($this, $this->otherSectionId);
+        DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 2]);
+        DB::table('sections')->where('id', $this->otherSectionId)->update(['adviser_id' => $this->anaId]);
+
+        $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $this->anaId])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['teacher_id' => 'already has 2 loads this term (1 subject and the advisory of']);
+
+        $termId = DB::table('section_subjects')->value('term_id');
+        $load = DB::table('teacher_load')->where('teacher_id', $this->anaId)->where('term_id', $termId)->first();
+        expect((int) $load->subject_count)->toBe(1)
+            ->and((int) $load->adviser_credit)->toBe(1)
+            ->and((int) $load->loads)->toBe(2)
+            ->and($load->is_overloaded)->toBeFalse();
+
+        DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 1]);
+        expect(DB::table('teacher_load')->where('teacher_id', $this->anaId)->value('is_overloaded'))->toBeTrue();
+    });
+
     it('does nothing when the teacher stays the same', function () {
         loadingRow($this);
 
@@ -190,9 +210,15 @@ describe('assigning', function () {
         expect(DB::table('audit_logs')->count())->toBe(0);
     });
 
-    it('allows going over the limit, since that is only a flag', function () {
+    it('refuses a teacher with a full load (5 subjects a term)', function () {
         loadingRow($this, $this->otherSectionId);
+        DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 1]);
 
+        $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $this->anaId])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['teacher_id' => 'Full load: Ana Reyes already has 1 load this term (1 subject)']);
+
+        DB::table('teachers')->where('id', $this->anaId)->update(['max_subjects' => 5]);
         $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $this->anaId])
             ->assertOk()
             ->assertJsonPath('data.teachers.1.assigned', 2);
@@ -369,4 +395,58 @@ it('feeds the plotter, so a new loading can be placed', function () {
     $this->getJson("/api/terms/{$this->termId}/sections/{$this->sectionId}/plotter")
         ->assertOk()
         ->assertJsonPath('data.loading.0.subject', 'Math 7');
+});
+
+describe('adding a subject to a section (subjects are name only, Nov 21, 2026)', function () {
+    it('offers subjects for every grade with "Add subject", and lists one once it has a teacher', function () {
+        $filipino = loadingSubject($this, 'Filipino', ['grade_level_id' => null, 'minutes_per_week' => null]);
+
+        $data = $this->getJson($this->url)->assertOk()->json('data');
+        expect(collect($data['addable'])->pluck('name')->all())->toBe(['Filipino'])
+            ->and(collect($data['rows'])->pluck('subject')->all())->toBe(['Math 7']);
+
+        $this->putJson("{$this->url}/{$filipino}", ['teacher_id' => $this->benId])->assertOk();
+
+        $data = $this->getJson($this->url)->json('data');
+        expect($data['addable'])->toBe([])
+            ->and(collect($data['rows'])->pluck('subject')->all())->toBe(['Filipino', 'Math 7'])
+            ->and(collect($data['rows'])->firstWhere('subject', 'Filipino')['teacher_id'])->toBe($this->benId);
+
+        // Taking its teacher away takes it off the section again.
+        $this->deleteJson("{$this->url}/{$filipino}")->assertOk();
+        expect(collect($this->getJson($this->url)->json('data.rows'))->pluck('subject')->all())->toBe(['Math 7']);
+    });
+
+    it('does not offer a Senior High subject to a Junior High section', function () {
+        loadingSubject($this, 'Senior Science', ['grade_level_id' => null, 'minutes_per_week' => null, 'level' => 'SHS']);
+        $junior = loadingSubject($this, 'Junior Science', ['grade_level_id' => null, 'minutes_per_week' => null, 'level' => 'JHS']);
+
+        expect(collect($this->getJson($this->url)->json('data.addable'))->pluck('id')->all())->toBe([$junior]);
+    });
+
+    it('does not offer a subject of another track or term', function () {
+        loadingSubject($this, 'Term 2 only', ['grade_level_id' => null, 'minutes_per_week' => null, 'term_no' => 2]);
+
+        expect($this->getJson($this->url)->json('data.addable'))->toBe([]);
+    });
+});
+
+describe('borrowing a teacher of the other level (Nov 21, 2026)', function () {
+    it('lists a Senior High teacher last, marked, and lets the Chairperson give them a subject', function () {
+        $tvl = DB::table('departments')->insertGetId(['name' => 'TVL', 'level' => 'SHS']);
+        $math = DB::table('departments')->insertGetId(['name' => 'Mathematics', 'level' => 'JHS']);
+        DB::table('teachers')->whereIn('id', [$this->anaId, $this->benId])->update(['department_id' => $math]);
+        $carla = DB::table('teachers')->insertGetId(['first_name' => 'Carla', 'last_name' => 'Abad', 'department_id' => $tvl]);
+
+        $teachers = collect($this->getJson($this->url)->json('data.teachers'));
+        expect($teachers->last()['id'])->toBe($carla)
+            ->and($teachers->last()['from_level'])->toBe('SHS')
+            ->and($teachers->last()['department'])->toBe('TVL')
+            ->and($teachers->firstWhere('id', $this->benId)['from_level'])->toBeNull();
+
+        $this->putJson("{$this->url}/{$this->mathId}", ['teacher_id' => $carla])->assertOk();
+
+        // Once teaching here, the teacher is part of the Chairperson's list, not borrowed.
+        expect(collect($this->getJson($this->url)->json('data.teachers'))->firstWhere('id', $carla)['from_level'])->toBeNull();
+    });
 });
